@@ -1,0 +1,24 @@
+[package]
+name = "lz78-experiments"
+edition = "2021"
+version = "0.1.0"
+
+[dependencies]
+
+anyhow.workspace = true
+rand.workspace = true
+itertools.workspace = true
+parquet.workspace = true
+png.workspace = true
+lz78.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde-pickle.workspace = true
+
+[[bin]]
+name = "generate"
+path = "src/generate.rs"
+
+[[bin]]
+name = "train"
+path = "src/train.rs"
