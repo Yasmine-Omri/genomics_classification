@@ -28,6 +28,10 @@ impl EncodedSequence {
         }
     }
 
+    pub fn compressed_len_bytes(&self) -> u64 {
+        (self.data.bit_len() + 7) / 8
+    }
+
     pub fn truncate(&mut self, num_bits: u64) {
         self.data.truncate(num_bits);
     }

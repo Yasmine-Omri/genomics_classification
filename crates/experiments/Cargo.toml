@@ -12,8 +12,9 @@ parquet.workspace = true
 png.workspace = true
 lz78.workspace = true
 clap.workspace = true
-serde.workspace = true
-serde-pickle.workspace = true
+flate2.workspace = true
+json.workspace = true
+rkyv.workspace = true
 
 [[bin]]
 name = "generate"
@@ -22,3 +23,7 @@ path = "src/generate.rs"
 [[bin]]
 name = "train"
 path = "src/train.rs"
+
+[[bin]]
+name = "encode-decode"
+path = "src/encode_decode.rs"

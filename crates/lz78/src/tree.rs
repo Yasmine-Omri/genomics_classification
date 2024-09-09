@@ -1,17 +1,17 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::sequence::Sequence;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Archive)]
 pub struct LZ78TreeNode {
     pub seen_count: u64,
     pub phrase_num: Option<u64>,
     pub branch_idxs: HashMap<u32, u64>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Archive)]
 pub struct LZ78Tree {
     nodes: Vec<LZ78TreeNode>,
     spa_gamma: f64,

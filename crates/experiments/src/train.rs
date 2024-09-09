@@ -1,35 +1,49 @@
-use std::{
-    fs::File,
-    io::Write,
-    path::{Path, PathBuf},
-    time::Instant,
-};
+use std::time::Instant;
 
 use clap::Parser;
 use itertools::Itertools;
 use lz78::{
-    sequence::{CharacterMap, CharacterSequence, U8Sequence},
+    sequence::{CharacterSequence, U8Sequence},
     spa::{LZ78SPA, SPA},
 };
 use lz78_experiments::{
     argparse::{Experiments, TrainCli},
-    utils::{read_fashion_mnist, read_wikitext, DatasetPartition},
+    utils::{
+        default_character_map, read_c4_realnewslike, read_fashion_mnist, read_wikitext,
+        DatasetPartition,
+    },
 };
 
-use anyhow::{anyhow, bail, Result};
-use parquet::{
-    file::reader::{FileReader, SerializedFileReader},
-    record::Field,
-};
-use png::Decoder;
-use serde_pickle::SerOptions;
+fn c4_realnewslike_experiment(cli: TrainCli) -> anyhow::Result<LZ78SPA> {
+    let character_map = default_character_map();
+    let mut spa = LZ78SPA::new(character_map.alphabet_size, cli.gamma);
+
+    let tic = Instant::now();
+    for i in 0..8 {
+        println!("Part {i}");
+        let text = read_c4_realnewslike(&format!("{}/c4", cli.data_dir.clone()), i as u64)?;
+
+        for sample in text {
+            let seq = CharacterSequence::from_data_filtered(sample, character_map.clone());
+            spa.train_on_block(&seq, !cli.start_at_root)?;
+        }
+
+        spa.save_to_file(cli.save_path.clone())
+            .expect("write failed");
+    }
+
+    let time = tic.elapsed().as_secs_f32();
+    println!(
+        "Trained with log loss {:.2} in {time:.3} seconds",
+        spa.get_scaled_log_loss()
+    );
+
+    Ok(spa)
+}
 
 fn wikitext_experiment(cli: TrainCli) -> anyhow::Result<LZ78SPA> {
-    let character_map = CharacterMap::from_data(
-        &"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890\n\t .,\"'?:;-_"
-            .to_string(),
-    );
-    let mut text = read_wikitext("data/wikitext")?;
+    let character_map = default_character_map();
+    let mut text = read_wikitext(&format!("{}/wikitext", cli.data_dir))?;
     if let Some(samples) = cli.samples {
         text = text.into_iter().take(samples as usize).collect_vec();
     }
@@ -55,7 +69,10 @@ fn wikitext_experiment(cli: TrainCli) -> anyhow::Result<LZ78SPA> {
 }
 
 fn fashion_mnist_experiment(cli: TrainCli) -> anyhow::Result<LZ78SPA> {
-    let mut bytes = read_fashion_mnist("data/fashion_mnist", DatasetPartition::Train)?;
+    let mut bytes = read_fashion_mnist(
+        &format!("{}/fashion_mnist", cli.data_dir),
+        DatasetPartition::Train,
+    )?;
     bytes = bytes
         .into_iter()
         .map(|v| v.into_iter().map(|x| x / 32).collect_vec())
@@ -94,9 +111,8 @@ fn main() {
         Experiments::FashionMnist => {
             fashion_mnist_experiment(cli).expect("fashion mnist experiment failed")
         }
+        Experiments::C4 => c4_realnewslike_experiment(cli).expect("c4 experiment failed"),
     };
 
-    let serialized = serde_pickle::to_vec(&spa, SerOptions::new()).expect("serialization failed");
-    let mut file = File::create(PathBuf::from(save_path)).expect("bad save path");
-    file.write(&serialized).expect("write failed");
+    spa.save_to_file(save_path).expect("write failed");
 }

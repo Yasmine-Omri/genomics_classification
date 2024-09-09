@@ -1,3 +1,8 @@
+use std::{
+    fs::File,
+    io::{Read, Write},
+};
+
 use crate::{
     encoder::{
         lz78_bits_to_encode_idx, lz78_decode, BitStorage, EncodedSequence, StreamingEncoder,
@@ -9,7 +14,7 @@ use crate::{
 use anyhow::Result;
 use itertools::Itertools;
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
-use serde::{Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize};
 
 pub struct StreamingLZ78Encoder {
     encoded: EncodedSequence,
@@ -150,7 +155,7 @@ pub trait SPA {
         T: Sequence;
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Archive, Serialize, Deserialize)]
 pub struct LZ78SPA {
     tree: LZ78Tree,
     state: u64,
@@ -198,6 +203,24 @@ impl LZ78SPA {
         }
 
         Ok((state, log_loss))
+    }
+
+    pub fn save_to_file(&self, path: String) -> Result<()> {
+        let mut file = File::create(path)?;
+        let mut bytes = rkyv::to_bytes::<_, 4>(self)?;
+        println!("Saving SPA: {:.3} MB", bytes.len() as f64 / 1e6);
+        file.write_all(&mut bytes)?;
+
+        Ok(())
+    }
+
+    pub fn from_file(path: String) -> Result<Self> {
+        let mut file = File::open(path)?;
+        let mut bytes: Vec<u8> = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        let archived = unsafe { rkyv::archived_root::<Self>(&bytes[..]) };
+
+        Ok(archived.deserialize(&mut rkyv::Infallible).unwrap())
     }
 }
 

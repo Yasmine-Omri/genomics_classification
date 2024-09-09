@@ -1,33 +1,24 @@
-use std::{
-    fs::File,
-    io::{Read, Write},
-};
-
 use anyhow::Result;
 use clap::Parser;
 use itertools::Itertools;
 use lz78::{
-    sequence::{CharacterMap, CharacterSequence, U8Sequence},
+    sequence::{CharacterSequence, U8Sequence},
     spa::{LZ78SPA, SPA},
 };
 use lz78_experiments::{
     argparse::{Experiments, GenerateCli},
-    utils::{read_fashion_mnist, DatasetPartition},
+    utils::{default_character_map, read_fashion_mnist, DatasetPartition},
 };
-use serde_pickle::DeOptions;
 
 fn wikitext_experiment(_cli: GenerateCli, mut spa: LZ78SPA) -> Result<()> {
-    let character_map = CharacterMap::from_data(
-        &"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890\n\t .,\"'?:;-_"
-            .to_string(),
-    );
+    let character_map = default_character_map();
 
     let mut generate_output = CharacterSequence::new(character_map.clone());
     spa.generate_data(
         &mut generate_output,
         5000,
-        50,
-        0.1,
+        500,
+        0.5,
         5,
         Some(&CharacterSequence::from_data_filtered(
             "This".to_string(),
@@ -69,18 +60,13 @@ fn fashion_mnist_experiment(_cli: GenerateCli, mut spa: LZ78SPA) -> Result<()> {
 
 fn main() {
     let cli = GenerateCli::parse();
-    let mut file = File::open(cli.save_path.clone()).expect("could not open spa file");
-    let mut spa_bytes: Vec<u8> = Vec::new();
-    file.read_to_end(&mut spa_bytes)
-        .expect("could not read file");
-
-    let spa: LZ78SPA =
-        serde_pickle::from_slice(&spa_bytes, DeOptions::new()).expect("could not deserialize");
+    let spa = LZ78SPA::from_file(cli.save_path.clone()).expect("read spa failed");
 
     match cli.experiment {
         Experiments::FashionMnist => {
             fashion_mnist_experiment(cli, spa).expect("fashion mnist experiment failed")
         }
         Experiments::Wikitext => wikitext_experiment(cli, spa).expect("wikitext experiment failed"),
+        Experiments::C4 => wikitext_experiment(cli, spa).expect("c4 experiment failed"),
     }
 }

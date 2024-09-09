@@ -1,11 +1,62 @@
-use std::{fs::File, io::Write, path::Path};
+use std::{
+    fs::File,
+    io::{Read, Write},
+    path::Path,
+};
 
 use anyhow::{anyhow, bail, Result};
+use flate2::bufread::GzDecoder;
+use json::parse;
+use lz78::sequence::CharacterMap;
 use parquet::{
     file::reader::{FileReader, SerializedFileReader},
     record::Field,
 };
 use png::Decoder;
+
+pub enum DatasetPartition {
+    Train,
+    Test,
+    Validation,
+}
+
+pub fn default_character_map() -> CharacterMap {
+    CharacterMap::from_data(
+        &"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890\n\t .,\"'?:;-_"
+            .to_string(),
+    )
+}
+
+pub fn read_c4_realnewslike(c4_dir: &str, part: u64) -> Result<Vec<String>> {
+    let path = format!("{c4_dir}/realnewslike/c4-train.{part:05}-of-00512.json.gz");
+    let mut file = File::open(path)?;
+    let mut buf: Vec<u8> = Vec::new();
+    file.read_to_end(&mut buf)?;
+    drop(file);
+
+    let mut gz = GzDecoder::new(&buf[..]);
+    let mut s = String::new();
+    gz.read_to_string(&mut s)?;
+
+    let mut result: Vec<String> = Vec::new();
+    for line in s.splitn(s.len(), '\n') {
+        let json = parse(line);
+        if json.is_err() {
+            break;
+        }
+        let json = json?;
+        if json["text"].is_string() {
+            result.push(
+                json["text"]
+                    .as_str()
+                    .ok_or(anyhow!("parsing failure"))?
+                    .to_owned(),
+            );
+        }
+    }
+
+    Ok(result)
+}
 
 pub fn read_wikitext(wikitext_dir: &str) -> Result<Vec<String>> {
     let mut result: Vec<String> = Vec::new();
@@ -34,12 +85,6 @@ pub fn read_wikitext(wikitext_dir: &str) -> Result<Vec<String>> {
     }
 
     Ok(result)
-}
-
-pub enum DatasetPartition {
-    Train,
-    Test,
-    Validation,
 }
 
 pub fn read_fashion_mnist(dir: &str, partition: DatasetPartition) -> Result<Vec<Vec<u8>>> {
@@ -101,4 +146,13 @@ pub fn read_fashion_mnist(dir: &str, partition: DatasetPartition) -> Result<Vec<
     }
 
     Ok(result)
+}
+
+pub fn read_test_file(path: &str) -> Result<String> {
+    let path = Path::new(&path);
+    let mut file = File::open(&path)?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf)?;
+
+    Ok(buf)
 }

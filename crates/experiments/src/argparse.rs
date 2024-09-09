@@ -7,6 +7,10 @@ pub struct TrainCli {
     #[arg(long, short)]
     pub save_path: String,
 
+    /// Directory where data files are stored
+    #[arg(long, short)]
+    pub data_dir: String,
+
     /// Which dataset to use
     #[arg(long, short)]
     pub experiment: Experiments,
@@ -40,6 +44,12 @@ pub struct GenerateCli {
     pub experiment: Experiments,
 }
 
+#[derive(Parser)]
+pub struct EncodeDecodeCli {
+    #[arg(long, short)]
+    pub filename: String,
+}
+
 #[derive(ValueEnum, Clone)]
 pub enum Experiments {
     /// Doc comment
@@ -48,4 +58,7 @@ pub enum Experiments {
 
     #[value()]
     Wikitext,
+
+    #[value()]
+    C4,
 }

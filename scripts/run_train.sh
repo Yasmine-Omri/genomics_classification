@@ -6,7 +6,7 @@
 #     --start-at-root
 
 cargo run -r -p lz78-experiments --bin train -- \
-    -s data/outputs/fashion-mnist--repeat-5000--start-at-root.pkl \
-    -e fashion-mnist \
-    --repeat 5000 \
+    -s spa_outputs/realnewslike \
+    -e c4 \
+    --data-dir ~/data \
     --start-at-root

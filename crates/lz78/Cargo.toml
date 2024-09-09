@@ -8,5 +8,4 @@ version = "0.1.0"
 anyhow.workspace = true
 rand.workspace = true
 itertools.workspace = true
-serde.workspace = true
-serde-pickle.workspace = true
+rkyv.workspace = true
