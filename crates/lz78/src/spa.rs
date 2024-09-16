@@ -205,6 +205,30 @@ impl LZ78SPA {
         Ok((state, log_loss))
     }
 
+    fn maybe_traverse_once_to_leaf<T: Sequence>(
+        &mut self,
+        input: &T,
+        state: u64,
+        start_idx: u64,
+        len: u64,
+    ) -> Result<(u64, f64)> {
+        let mut log_loss = 0.0;
+        let end_idx = start_idx + len;
+
+        let traversal_output = self
+            .tree
+            .traverse_to_leaf_from(state, input, start_idx, end_idx, false, false)?;
+
+        log_loss += traversal_output.log_loss;
+        let state = if traversal_output.reached_leaf {
+            LZ78Tree::ROOT_IDX
+        } else {
+            traversal_output.state_idx
+        };
+
+        Ok((state, log_loss))
+    }
+
     pub fn save_to_file(&self, path: String) -> Result<()> {
         let mut file = File::create(path)?;
         let mut bytes = rkyv::to_bytes::<_, 4>(self)?;
@@ -332,9 +356,9 @@ impl SPA for LZ78SPA {
                     state = if k == 0 {
                         LZ78Tree::ROOT_IDX
                     } else {
-                        self.compute_test_loss_on_slice_from_state(
+                        self.maybe_traverse_once_to_leaf(
                             output_seq,
-                            state,
+                            LZ78Tree::ROOT_IDX,
                             sample_num - k,
                             k,
                         )?
@@ -342,7 +366,6 @@ impl SPA for LZ78SPA {
                     };
 
                     if !self.tree.is_leaf(state) && state != LZ78Tree::ROOT_IDX {
-                        state = LZ78Tree::ROOT_IDX;
                         break;
                     }
                 }

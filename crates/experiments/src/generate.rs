@@ -18,7 +18,7 @@ fn wikitext_experiment(_cli: GenerateCli, mut spa: LZ78SPA) -> Result<()> {
         &mut generate_output,
         5000,
         500,
-        0.5,
+        0.2,
         5,
         Some(&CharacterSequence::from_data_filtered(
             "This".to_string(),
