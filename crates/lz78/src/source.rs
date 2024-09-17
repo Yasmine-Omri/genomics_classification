@@ -73,11 +73,15 @@ impl<T> LZ78Source<T>
 where
     T: SourceNode,
 {
-    pub fn new(alphabet_size: u32, source_node: T) -> Self {
+    pub fn new(alphabet_size: u32, source_node: T, gamma: Option<f64>) -> Self {
         let mut tree_node_to_source_node: HashMap<u64, T> = HashMap::new();
         tree_node_to_source_node.insert(LZ78Tree::ROOT_IDX, source_node);
         Self {
-            tree: LZ78Tree::new(alphabet_size),
+            tree: if let Some(g) = gamma {
+                LZ78Tree::new_spa(alphabet_size, g)
+            } else {
+                LZ78Tree::new(alphabet_size)
+            },
             tree_node_to_source_node,
             state: LZ78Tree::ROOT_IDX,
             alphabet_size,
@@ -129,6 +133,7 @@ mod tests {
         let mut source = LZ78Source::new(
             2,
             SimplifiedBinarySourceNode::new(vec![0.5, 0.5], vec![0.0, 1.0], &mut rng),
+            None,
         );
 
         let output = source
@@ -150,7 +155,7 @@ mod tests {
     #[test]
     fn sanity_check_lz778_source() {
         let mut rng = thread_rng();
-        let mut source = LZ78Source::new(4, DefaultLZ78SourceNode {});
+        let mut source = LZ78Source::new(4, DefaultLZ78SourceNode {}, None);
 
         let output = source
             .generate_symbols(50, &mut rng)

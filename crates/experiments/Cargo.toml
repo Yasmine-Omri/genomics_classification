@@ -25,5 +25,9 @@ name = "train"
 path = "src/train.rs"
 
 [[bin]]
+name = "source_compression"
+path = "src/lz78_source_compression.rs"
+
+[[bin]]
 name = "encode-decode"
 path = "src/encode_decode.rs"
