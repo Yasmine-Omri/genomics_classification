@@ -371,6 +371,8 @@ impl SPA for LZ78SPA {
                 }
             }
 
+            // Compute the probability, according to the LZ78 SPA, that the
+            // next symbol is x, for every x in the alphabet
             let mut spa = self.tree.compute_spa(state);
             let most_likely_next_sym = (0..self.alphabet_size)
                 .max_by(|i, j| spa[*i as usize].total_cmp(&spa[*j as usize]))

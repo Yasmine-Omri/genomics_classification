@@ -4,13 +4,20 @@ use std::collections::HashMap;
 
 use crate::sequence::Sequence;
 
+/// A node of the LZ78 tree. The tree structure is encoded by storing the index
+/// of the child node in the `nodes` vector within the tree root.
 #[derive(Debug, Serialize, Deserialize, Archive)]
 pub struct LZ78TreeNode {
+    /// The number of times this node has been visited
     pub seen_count: u64,
+    /// Used for LZ78 encoding; stores which phrase in the LZ78 parsing of the
+    /// sequence being compressed corresponds to this node
     pub phrase_num: Option<u64>,
     pub branch_idxs: HashMap<u32, u64>,
 }
 
+/// The root of the LZ78 tree. Stores a list of all nodes within the tree, as
+/// well as metadata like the SPA parameter and alphabet size
 #[derive(Debug, Serialize, Deserialize, Archive)]
 pub struct LZ78Tree {
     nodes: Vec<LZ78TreeNode>,
