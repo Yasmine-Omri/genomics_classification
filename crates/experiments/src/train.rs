@@ -3,19 +3,46 @@ use std::time::Instant;
 use clap::Parser;
 use itertools::Itertools;
 use lz78::{
-    sequence::{CharacterSequence, U8Sequence},
+    sequence::{CharacterMap, CharacterSequence, U8Sequence},
     spa::{LZ78SPA, SPA},
 };
 use lz78_experiments::{
-    argparse::{Experiments, TrainCli},
+    argparse::{Datasets, TrainCli},
     utils::{
-        default_character_map, read_c4_realnewslike, read_fashion_mnist, read_wikitext,
-        DatasetPartition,
+        default_character_map, read_c4_realnewslike, read_fashion_mnist, read_file_to_string,
+        read_wikitext, DatasetPartition,
     },
 };
 
+fn shakespeare_experiment(cli: TrainCli) -> anyhow::Result<LZ78SPA> {
+    let data = read_file_to_string(&format!(
+        "{}/Shakespeare/finaldata.txt",
+        cli.data_dir.clone()
+    ))?;
+
+    let character_map = CharacterMap::from_data(&data);
+    character_map.save_to_file(cli.save_path.clone() + ".charmap")?;
+
+    let mut spa = LZ78SPA::new(character_map.alphabet_size, cli.gamma);
+
+    let tic = Instant::now();
+    let seq = CharacterSequence::from_data_filtered(data, character_map.clone());
+    spa.train_on_block(&seq, false)?;
+    spa.save_to_file(cli.save_path.clone())?;
+
+    let time = tic.elapsed().as_secs_f32();
+    println!(
+        "Trained with log loss {:.2} in {time:.3} seconds",
+        spa.get_scaled_log_loss()
+    );
+
+    Ok(spa)
+}
+
 fn c4_realnewslike_experiment(cli: TrainCli) -> anyhow::Result<LZ78SPA> {
     let character_map = default_character_map();
+    character_map.save_to_file(cli.save_path.clone() + ".charmap")?;
+
     let mut spa = LZ78SPA::new(character_map.alphabet_size, cli.gamma);
 
     let tic = Instant::now();
@@ -28,8 +55,7 @@ fn c4_realnewslike_experiment(cli: TrainCli) -> anyhow::Result<LZ78SPA> {
             spa.train_on_block(&seq, !cli.start_at_root)?;
         }
 
-        spa.save_to_file(cli.save_path.clone())
-            .expect("write failed");
+        spa.save_to_file(cli.save_path.clone())?;
     }
 
     let time = tic.elapsed().as_secs_f32();
@@ -69,7 +95,7 @@ fn wikitext_experiment(cli: TrainCli) -> anyhow::Result<LZ78SPA> {
 }
 
 fn fashion_mnist_experiment(cli: TrainCli) -> anyhow::Result<LZ78SPA> {
-    let mut bytes = read_fashion_mnist(
+    let (mut bytes, _) = read_fashion_mnist(
         &format!("{}/fashion_mnist", cli.data_dir),
         DatasetPartition::Train,
     )?;
@@ -106,12 +132,19 @@ fn main() {
     let cli = TrainCli::parse();
     let save_path = cli.save_path.clone();
 
-    let spa = match cli.experiment {
-        Experiments::Wikitext => wikitext_experiment(cli).expect("wikitext experiment failed"),
-        Experiments::FashionMnist => {
+    let spa = match cli.dataset {
+        Datasets::Wikitext => wikitext_experiment(cli).expect("wikitext experiment failed"),
+        Datasets::FashionMnist => {
             fashion_mnist_experiment(cli).expect("fashion mnist experiment failed")
         }
-        Experiments::C4 => c4_realnewslike_experiment(cli).expect("c4 experiment failed"),
+        Datasets::C4 => c4_realnewslike_experiment(cli).expect("c4 experiment failed"),
+        Datasets::Mnist => todo!(),
+        Datasets::Cifar10 => todo!(),
+        Datasets::Imdb => todo!(),
+        Datasets::Spam => todo!(),
+        Datasets::Shakespeare => {
+            shakespeare_experiment(cli).expect("Shakespeare experiment failed")
+        }
     };
 
     spa.save_to_file(save_path).expect("write failed");

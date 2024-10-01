@@ -13,8 +13,12 @@ png.workspace = true
 lz78.workspace = true
 clap.workspace = true
 flate2.workspace = true
-json.workspace = true
+jzon.workspace = true
 rkyv.workspace = true
+rayon.workspace = true
+ndarray.workspace = true
+bytes.workspace = true
+csv.workspace = true
 
 [[bin]]
 name = "generate"
@@ -25,9 +29,17 @@ name = "train"
 path = "src/train.rs"
 
 [[bin]]
-name = "source_compression"
-path = "src/lz78_source_compression.rs"
+name = "source-compression"
+path = "src/compression_via_lz78_source.rs"
+
+[[bin]]
+name = "source-compression-fixed"
+path = "src/compression_fixed_lz78_source.rs"
 
 [[bin]]
 name = "encode-decode"
 path = "src/encode_decode.rs"
+
+[[bin]]
+name = "classify"
+path = "src/classify.rs"

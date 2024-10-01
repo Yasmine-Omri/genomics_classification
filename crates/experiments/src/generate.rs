@@ -2,31 +2,32 @@ use anyhow::Result;
 use clap::Parser;
 use itertools::Itertools;
 use lz78::{
-    sequence::{CharacterSequence, U8Sequence},
+    sequence::{CharacterMap, CharacterSequence, U8Sequence},
     spa::{LZ78SPA, SPA},
 };
 use lz78_experiments::{
-    argparse::{Experiments, GenerateCli},
-    utils::{default_character_map, read_fashion_mnist, DatasetPartition},
+    argparse::{Datasets, GenerateCli},
+    utils::{read_fashion_mnist, DatasetPartition},
 };
 
-fn wikitext_experiment(_cli: GenerateCli, mut spa: LZ78SPA) -> Result<()> {
-    let character_map = default_character_map();
+fn text_gen_experiment(cli: GenerateCli, mut spa: LZ78SPA) -> Result<()> {
+    let character_map = CharacterMap::from_file(cli.save_path + ".charmap")?;
 
     let mut generate_output = CharacterSequence::new(character_map.clone());
+    let seed_data = cli.seed_data.unwrap_or("".to_string());
     spa.generate_data(
         &mut generate_output,
-        5000,
-        500,
-        0.2,
-        5,
+        cli.n,
+        cli.min_context,
+        cli.temperature,
+        cli.topk,
         Some(&CharacterSequence::from_data_filtered(
-            "This".to_string(),
+            seed_data.clone(),
             character_map.clone(),
         )),
     )?;
 
-    println!("This{}", generate_output.data);
+    println!("{seed_data}{}", generate_output.data);
 
     Ok(())
 }
@@ -34,18 +35,18 @@ fn wikitext_experiment(_cli: GenerateCli, mut spa: LZ78SPA) -> Result<()> {
 fn fashion_mnist_experiment(_cli: GenerateCli, mut spa: LZ78SPA) -> Result<()> {
     let mut generate_output = U8Sequence::new(256);
 
-    let mut test_set = read_fashion_mnist("data/fashion_mnist", DatasetPartition::Test)?;
+    let (mut test_set, _) = read_fashion_mnist("data/fashion_mnist", DatasetPartition::Test)?;
     test_set = test_set
         .into_iter()
         .map(|v| v.into_iter().map(|x| x / 32).collect_vec())
         .collect_vec();
-    let test_img = U8Sequence::from_data(test_set[40][0..28 * 28 / 2].to_vec(), 256 / 32)?;
+    let test_img = U8Sequence::from_data(test_set[0][0..28 * 28 / 2].to_vec(), 256 / 32)?;
     spa.generate_data(
         &mut generate_output,
         28 * 28 / 2,
         1000,
-        0.5,
-        6,
+        0.1,
+        3,
         Some(&test_img),
     )?;
 
@@ -62,11 +63,18 @@ fn main() {
     let cli = GenerateCli::parse();
     let spa = LZ78SPA::from_file(cli.save_path.clone()).expect("read spa failed");
 
-    match cli.experiment {
-        Experiments::FashionMnist => {
+    match cli.dataset {
+        Datasets::FashionMnist => {
             fashion_mnist_experiment(cli, spa).expect("fashion mnist experiment failed")
         }
-        Experiments::Wikitext => wikitext_experiment(cli, spa).expect("wikitext experiment failed"),
-        Experiments::C4 => wikitext_experiment(cli, spa).expect("c4 experiment failed"),
+        Datasets::Wikitext => text_gen_experiment(cli, spa).expect("wikitext experiment failed"),
+        Datasets::C4 => text_gen_experiment(cli, spa).expect("c4 experiment failed"),
+        Datasets::Mnist => todo!(),
+        Datasets::Cifar10 => todo!(),
+        Datasets::Imdb => todo!(),
+        Datasets::Spam => todo!(),
+        Datasets::Shakespeare => {
+            text_gen_experiment(cli, spa).expect("Shakespeare experiment failed")
+        }
     }
 }

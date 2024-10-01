@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     encoder::{
-        lz78_bits_to_encode_idx, lz78_decode, BitStorage, EncodedSequence, StreamingEncoder,
+        lz78_bits_to_encode_phrase, lz78_decode, BitStorage, EncodedSequence, StreamingEncoder,
     },
     sequence::Sequence,
     tree::LZ78Tree,
@@ -84,7 +84,7 @@ impl<T: Sequence> StreamingEncoder<T> for StreamingLZ78Encoder {
         for i in 0..(output_leaves.len() as u64) {
             n_output_bits_finished_phrases = n_output_bits;
             n_output_bits +=
-                lz78_bits_to_encode_idx(i + self.n_output_leaves, input.alphabet_size()) as u64;
+                lz78_bits_to_encode_phrase(i + self.n_output_leaves, input.alphabet_size()) as u64;
         }
 
         let mut total_output_leaves = self.n_output_leaves + (output_leaves.len() - 1) as u64;
@@ -100,7 +100,7 @@ impl<T: Sequence> StreamingEncoder<T> for StreamingLZ78Encoder {
         for (i, (leaf, ref_idx)) in output_leaves.into_iter().zip(ref_idxs).enumerate() {
             let ref_idx = if let Some(x) = ref_idx { x + 1 } else { 0 };
             let bitwidth =
-                lz78_bits_to_encode_idx(i as u64 + self.n_output_leaves, input.alphabet_size());
+                lz78_bits_to_encode_phrase(i as u64 + self.n_output_leaves, input.alphabet_size());
             let val = if i == 0 && self.n_output_leaves == 0 {
                 leaf as u64
             } else {
@@ -126,15 +126,15 @@ impl<T: Sequence> StreamingEncoder<T> for StreamingLZ78Encoder {
 }
 
 pub trait SPA {
-    fn train_on_block<T>(&mut self, input: &T, include_prev_context: bool) -> Result<f64>
+    fn train_on_block<T: ?Sized>(&mut self, input: &T, include_prev_context: bool) -> Result<f64>
     where
         T: Sequence;
 
-    fn compute_test_loss<T>(&mut self, input: &T) -> Result<f64>
+    fn compute_test_loss<T: ?Sized>(&mut self, input: &T) -> Result<f64>
     where
         T: Sequence;
 
-    fn compute_test_loss_from_root<T>(&mut self, input: &T) -> Result<f64>
+    fn compute_test_loss_from_root<T: ?Sized>(&mut self, input: &T) -> Result<f64>
     where
         T: Sequence;
 
@@ -176,7 +176,7 @@ impl LZ78SPA {
     }
 
     /// Traverses the tree and returns the new state and loss
-    fn compute_test_loss_on_slice_from_state<T: Sequence>(
+    fn compute_test_loss_on_slice_from_state<T: Sequence + ?Sized>(
         &mut self,
         input: &T,
         state: u64,
@@ -231,7 +231,7 @@ impl LZ78SPA {
 
     pub fn save_to_file(&self, path: String) -> Result<()> {
         let mut file = File::create(path)?;
-        let mut bytes = rkyv::to_bytes::<_, 4>(self)?;
+        let mut bytes = rkyv::to_bytes::<_, 1024>(self)?;
         println!("Saving SPA: {:.3} MB", bytes.len() as f64 / 1e6);
         file.write_all(&mut bytes)?;
 
@@ -249,7 +249,7 @@ impl LZ78SPA {
 }
 
 impl SPA for LZ78SPA {
-    fn train_on_block<T>(&mut self, input: &T, include_prev_context: bool) -> Result<f64>
+    fn train_on_block<T: ?Sized>(&mut self, input: &T, include_prev_context: bool) -> Result<f64>
     where
         T: Sequence,
     {
@@ -285,7 +285,7 @@ impl SPA for LZ78SPA {
         Ok((self.total_log_loss - prev_log_loss) / (input.len() as f64))
     }
 
-    fn compute_test_loss<T>(&mut self, input: &T) -> Result<f64>
+    fn compute_test_loss<T: ?Sized>(&mut self, input: &T) -> Result<f64>
     where
         T: Sequence,
     {
@@ -294,7 +294,7 @@ impl SPA for LZ78SPA {
             .1)
     }
 
-    fn compute_test_loss_from_root<T>(&mut self, input: &T) -> Result<f64>
+    fn compute_test_loss_from_root<T: ?Sized>(&mut self, input: &T) -> Result<f64>
     where
         T: Sequence,
     {

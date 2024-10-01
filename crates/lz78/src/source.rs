@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{bail, Result};
 use rand::Rng;
@@ -13,6 +16,37 @@ pub trait SourceNode {
     fn new_child(&self, rng: &mut impl Rng) -> Self;
 
     fn spa(&self, tree: &LZ78Tree, node_idx: u64) -> Vec<f64>;
+}
+
+pub struct SimplifiedSourceNodeInspector {
+    node: SimplifiedBinarySourceNode,
+    theta_list: Arc<Mutex<Vec<f64>>>, // theta at each time
+}
+
+impl SourceNode for SimplifiedSourceNodeInspector {
+    fn new_child(&self, rng: &mut impl Rng) -> Self {
+        SimplifiedSourceNodeInspector {
+            node: self.node.new_child(rng),
+            theta_list: self.theta_list.clone(),
+        }
+    }
+
+    fn spa(&self, tree: &LZ78Tree, node_idx: u64) -> Vec<f64> {
+        self.theta_list.lock().unwrap().push(self.node.theta);
+        self.node.spa(tree, node_idx)
+    }
+}
+
+impl SimplifiedSourceNodeInspector {
+    pub fn new(
+        theta_list: Arc<Mutex<Vec<f64>>>,
+        theta_pdf: Vec<f64>,
+        theta_values: Vec<f64>,
+        rng: &mut impl Rng,
+    ) -> Self {
+        let node = SimplifiedBinarySourceNode::new(theta_pdf, theta_values, rng);
+        Self { node, theta_list }
+    }
 }
 
 pub struct SimplifiedBinarySourceNode {

@@ -3,6 +3,8 @@ use anyhow::Result;
 use crate::sequence::Sequence;
 use crate::tree::LZ78Tree;
 
+/// Stores an encoded bitstream, as well as the alphabet size and length of the
+/// original sequence
 #[derive(Debug, Clone)]
 pub struct EncodedSequence {
     data: BitStorage,
@@ -28,14 +30,17 @@ impl EncodedSequence {
         }
     }
 
+    /// Length of the bitstream, rounded up to the nearest byte
     pub fn compressed_len_bytes(&self) -> u64 {
         (self.data.bit_len() + 7) / 8
     }
 
+    // In-place, truncates the underlying compressed bitstream
     pub fn truncate(&mut self, num_bits: u64) {
         self.data.truncate(num_bits);
     }
 
+    /// Pushes some bits to the bitstream
     pub fn push(&mut self, val: u64, bitwidth: u16) {
         self.data.push(val, bitwidth)
     }
@@ -48,11 +53,13 @@ impl EncodedSequence {
         self.data.extend_capacity(n);
     }
 
+    /// Returns a slice of the bitstream, as a byte array
     pub fn get_raw(&self) -> &[u8] {
         &self.data.data
     }
 }
 
+/// Generic interface for encoding and decoding
 pub trait Encoder {
     fn encode<T>(&self, input: &T) -> Result<EncodedSequence>
     where
@@ -63,6 +70,7 @@ pub trait Encoder {
         T: Sequence;
 }
 
+/// Interface for encoding blocks of a dataset in a streaming fashion
 pub trait StreamingEncoder<T: Sequence> {
     fn encode_block(&mut self, input: &T) -> Result<()>;
 
@@ -95,9 +103,13 @@ impl LZ8Encoder {
     }
 }
 
+/// Container for storing a bitstream, to which integers of arbitrary bitwidth
+/// can be pushed.
 #[derive(Debug, Clone)]
 pub struct BitStorage {
     data: Vec<u8>,
+    /// number of bits, modulo 8, i.e., the number of bits that do not evenly
+    /// fit into a byte array. These are stored in the last index of `data`
     overflow_len: u16,
 }
 
@@ -109,10 +121,13 @@ impl BitStorage {
         }
     }
 
+    /// Extends the capacity of the underlying byte array; used for performance
+    /// reasons in streaming compression
     pub fn extend_capacity(&mut self, n: u64) {
         self.data.reserve(n as usize);
     }
 
+    /// Push some bits to the bitstream
     pub fn push(&mut self, val: u64, bitwidth: u16) {
         let mut buffer = if self.overflow_len > 0 {
             self.data.pop().unwrap_or(0)
@@ -133,6 +148,7 @@ impl BitStorage {
         }
     }
 
+    /// Trucates the bitstream to `num_bits` bits
     pub fn truncate(&mut self, num_bits: u64) {
         self.data.truncate(((num_bits + 7) / 8) as usize);
         self.overflow_len = (num_bits % 8) as u16;
@@ -142,6 +158,7 @@ impl BitStorage {
         }
     }
 
+    /// Returns the number of bits being stored
     pub fn bit_len(&self) -> u64 {
         if self.overflow_len == 0 {
             self.data.len() as u64 * 8
@@ -151,10 +168,12 @@ impl BitStorage {
     }
 }
 
-pub fn lz78_bits_to_encode_idx(i: u64, alpha_size: u32) -> u16 {
-    (((i + 1) as f64).log2() + (alpha_size as f64).log2()).ceil() as u16
+/// returns the number of bits required to encode the specified phrase
+pub fn lz78_bits_to_encode_phrase(phrase_idx: u64, alpha_size: u32) -> u16 {
+    (((phrase_idx + 1) as f64).log2() + (alpha_size as f64).log2()).ceil() as u16
 }
 
+/// Compresses a sequence using LZ78
 pub fn lz78_encode<T>(input: &T) -> Result<EncodedSequence>
 where
     T: Sequence,
@@ -165,10 +184,16 @@ where
 
     let mut start_idx: u64 = 0;
 
+    // Compute the LZ78 phrases and build the tree
     while start_idx < input.len() {
+        // Process a single phrase
         let traversal_result =
             tree.traverse_root_to_leaf(input, start_idx, input.len(), true, true)?;
+
+        // Finds the previous phrase in the LZ78 parsing that forms the prefix
+        // of the current phrase
         ref_idxs.push(tree.phrase_num(traversal_result.state_idx));
+        // The last element of the current phrase
         output_leaves.push(traversal_result.added_leaf.unwrap_or(0));
         start_idx = traversal_result.phrase_end_idx + 1;
     }
@@ -176,15 +201,16 @@ where
     // compute output
     let mut bits = BitStorage::new();
 
-    // compute number of bytes
+    // compute number of bits we will need in total for the output
     let n_output_bits: u64 = (0..output_leaves.len())
-        .map(|i| lz78_bits_to_encode_idx(i as u64, input.alphabet_size()) as u64)
+        .map(|i| lz78_bits_to_encode_phrase(i as u64, input.alphabet_size()) as u64)
         .sum();
     bits.extend_capacity((n_output_bits + 7) / 8);
 
+    // Encode each phrase in the bitarray
     for (i, (leaf, ref_idx)) in output_leaves.into_iter().zip(ref_idxs).enumerate() {
         let ref_idx = if let Some(x) = ref_idx { x + 1 } else { 0 };
-        let bitwidth = lz78_bits_to_encode_idx(i as u64, input.alphabet_size());
+        let bitwidth = lz78_bits_to_encode_phrase(i as u64, input.alphabet_size());
         let val = if i == 0 {
             leaf as u64
         } else {
@@ -201,14 +227,19 @@ where
     ))
 }
 
+/// Decodes a sequence using LZ78
 pub fn lz78_decode<T>(output: &mut T, input: &EncodedSequence) -> Result<()>
 where
     T: Sequence,
 {
+    // the indices at which phrases start in the uncompressed sequence
     let mut phrase_starts: Vec<u64> = Vec::new();
+    // how long each phrase is (can be computed from phrase_starts, but this
+    // makes decoding easier)
     let mut phrase_lengths: Vec<u64> = Vec::new();
 
     let mut bits_decoded: u64 = 0;
+    
     let mut current_bit_offset: u16 = 0;
 
     let mut input_idx = 0;
@@ -218,7 +249,7 @@ where
 
     while bits_decoded < input.data.bit_len() {
         let i = phrase_starts.len();
-        let mut bitwidth: i32 = lz78_bits_to_encode_idx(i as u64, alphabet_size) as i32;
+        let mut bitwidth: i32 = lz78_bits_to_encode_phrase(i as u64, alphabet_size) as i32;
         bits_decoded += bitwidth as u64;
 
         let mut decoded_val: u64 =

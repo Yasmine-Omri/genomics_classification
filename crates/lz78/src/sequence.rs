@@ -1,8 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    io::{Read, Write},
+};
 
 use anyhow::{anyhow, bail, Result};
+use rkyv::{Archive, Deserialize, Serialize};
 
-pub trait Sequence {
+pub trait Sequence: Sync {
     fn alphabet_size(&self) -> u32;
 
     fn len(&self) -> u64;
@@ -57,7 +62,7 @@ impl BinarySequence {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, Archive)]
 pub struct CharacterMap {
     char_to_sym: HashMap<String, u32>,
     sym_to_char: Vec<String>,
@@ -127,12 +132,29 @@ impl CharacterMap {
             None
         }
     }
+
+    pub fn save_to_file(&self, path: String) -> Result<()> {
+        let mut file = File::create(path)?;
+        let mut bytes = rkyv::to_bytes::<_, 1024>(self)?;
+        file.write_all(&mut bytes)?;
+
+        Ok(())
+    }
+
+    pub fn from_file(path: String) -> Result<Self> {
+        let mut file = File::open(path)?;
+        let mut bytes: Vec<u8> = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        let archived = unsafe { rkyv::archived_root::<Self>(&bytes[..]) };
+
+        Ok(archived.deserialize(&mut rkyv::Infallible).unwrap())
+    }
 }
 
 #[derive(Clone)]
 pub struct CharacterSequence {
     pub data: String,
-    encoded: Vec<u32>,
+    pub encoded: Vec<u32>,
     pub character_map: CharacterMap,
 }
 

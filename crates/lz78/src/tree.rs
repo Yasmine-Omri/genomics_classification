@@ -107,26 +107,32 @@ impl LZ78Tree {
         &mut self.nodes[idx as usize]
     }
 
-    pub fn traverse_root_to_leaf(
+    pub fn traverse_root_to_leaf<T>(
         &mut self,
-        x: &dyn Sequence,
+        x: &T,
         start_idx: u64,
         end_idx: u64,
         grow: bool,
         update_counts: bool,
-    ) -> Result<LZ78TraversalResult> {
+    ) -> Result<LZ78TraversalResult>
+    where
+        T: Sequence,
+    {
         self.traverse_to_leaf_from(Self::ROOT_IDX, x, start_idx, end_idx, grow, update_counts)
     }
 
-    pub fn traverse_to_leaf_from(
+    pub fn traverse_to_leaf_from<T: ?Sized>(
         &mut self,
         node_idx: u64,
-        x: &dyn Sequence,
+        x: &T,
         start_idx: u64,
         end_idx: u64,
         grow: bool,
         update_counts: bool,
-    ) -> Result<LZ78TraversalResult> {
+    ) -> Result<LZ78TraversalResult>
+    where
+        T: Sequence,
+    {
         let num_phrases = self.num_phrases();
 
         let mut state_idx = node_idx;

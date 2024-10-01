@@ -5,11 +5,11 @@ use lz78::{
     encoder::{Encoder, LZ8Encoder},
     sequence::{CharacterSequence, Sequence},
 };
-use lz78_experiments::{argparse::EncodeDecodeCli, utils::read_test_file};
+use lz78_experiments::{argparse::EncodeDecodeCli, utils::read_file_to_string};
 
 fn main() {
     let cli = EncodeDecodeCli::parse();
-    let data = read_test_file(&cli.filename).expect("file read error");
+    let data = read_file_to_string(&cli.filename).expect("file read error");
     let lz78 = LZ8Encoder::new();
     let input = CharacterSequence::from_data_inferred_character_map(data);
 
