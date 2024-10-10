@@ -76,5 +76,8 @@ fn main() {
         Datasets::Shakespeare => {
             text_gen_experiment(cli, spa).expect("Shakespeare experiment failed")
         }
+        Datasets::TinyStories => {
+            text_gen_experiment(cli, spa).expect("tinystories experiment failed")
+        }
     }
 }

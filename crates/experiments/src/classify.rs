@@ -14,12 +14,12 @@ use lz78_experiments::{
         read_mnist, read_spam, DatasetPartition,
     },
 };
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
-
-// All image datasets so far have 10 classes
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 
 fn num_classes(dataset: Datasets) -> u64 {
-    if let Datasets::Imdb = dataset {
+    if dataset == Datasets::Imdb || dataset == Datasets::Spam {
         2
     } else {
         10
@@ -123,19 +123,23 @@ fn main() {
     let alpha_size = sequences[0].alphabet_size(); // all sequences have the same alphabet size
 
     let n_class = num_classes(cli.dataset);
-    let mut spas = (0..n_class)
-        .map(|_| LZ78SPA::new(alpha_size, cli.gamma))
-        .collect_vec();
 
     let tic = Instant::now();
+    let class_to_seqs = classes.into_iter().zip(sequences).into_group_map();
 
-    for (seq, &class) in sequences.into_iter().zip(classes.iter()) {
-        for _ in 0..cli.repeat {
-            spas[class as usize]
-                .train_on_block(seq.as_ref(), false)
-                .expect("train failed");
-        }
-    }
+    let mut spas = (0..n_class)
+        .into_par_iter()
+        .map(|class| {
+            let mut spa = LZ78SPA::new(alpha_size, cli.gamma);
+            for seq in class_to_seqs.get(&(class as u8)).unwrap() {
+                for _ in 0..cli.repeat {
+                    spa.train_on_block(seq.as_ref(), false)
+                        .expect("train failed");
+                }
+            }
+            spa
+        })
+        .collect::<Vec<_>>();
 
     let time = tic.elapsed().as_secs_f32();
     println!("Trained SPA in {time:.3} seconds");
@@ -157,7 +161,7 @@ fn main() {
             .map(|(i, spa)| {
                 (
                     i,
-                    spa.compute_test_loss_from_root(seq.as_ref())
+                    spa.compute_test_loss(seq.as_ref(), false)
                         .expect("failed to compute test loss"),
                 )
             })

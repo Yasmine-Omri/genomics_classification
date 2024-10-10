@@ -4,50 +4,61 @@ use std::{
 };
 
 use crate::{
-    encoder::{
-        lz78_bits_to_encode_phrase, lz78_decode, BitStorage, EncodedSequence, StreamingEncoder,
-    },
+    encoder::{lz78_bits_to_encode_phrase, lz78_decode, EncodedSequence, StreamingEncoder},
     sequence::Sequence,
     tree::LZ78Tree,
     util::sample_from_pdf,
 };
 use anyhow::Result;
+use bitvec::vec::BitVec;
+use bytes::{Buf, BufMut, Bytes};
 use itertools::Itertools;
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
-use rkyv::{Archive, Deserialize, Serialize};
 
+/// Streaming LZ78 encoder: you can pass in the input sequence to be compressed
+/// in chunks, and the output (`encoder.get_encoded_sequence()`) is as if the
+/// full concatenated sequence was passed in to an LZ78 encoder
 pub struct StreamingLZ78Encoder {
+    /// Current encoded sequence
     encoded: EncodedSequence,
+    /// Current LZ78 prefix tree
     tree: LZ78Tree,
+    /// Node of the LZ78 tree currently being traversed. This is needed for
+    /// "picking up where we left off" when compressing multiple blocks
     state: u64,
+    /// Number of symbols compressed thus far
     n: u64,
-    n_output_leaves: u64,
+    /// Number of full phrases parsed so far
+    n_phrases: u64,
+    /// How many of the output bits in `encoded` correspond to finished phrases,
+    /// i.e., ones where a leaf was added to the LZ78 tree
     n_output_bits_finished_phrases: u64,
-    total_log_loss: f64,
 }
 
 impl StreamingLZ78Encoder {
     pub fn new(alpha_size: u32) -> Self {
-        let bits = BitStorage::new();
+        let bits = BitVec::new();
         let encoded = EncodedSequence::from_data(bits, 0, alpha_size);
         Self {
             encoded,
             tree: LZ78Tree::new(alpha_size),
             state: LZ78Tree::ROOT_IDX,
             n: 0,
-            n_output_leaves: 0,
+            n_phrases: 0,
             n_output_bits_finished_phrases: 0,
-            total_log_loss: 0.0,
         }
     }
 }
 
 impl<T: Sequence> StreamingEncoder<T> for StreamingLZ78Encoder {
+    /// Encode a block of the input using LZ78 and update `self.encoded`
     fn encode_block(&mut self, input: &T) -> Result<()> {
         let mut start_idx = 0;
 
-        let mut ref_idxs: Vec<Option<u64>> = Vec::new();
+        let mut ref_idxs: Vec<u64> = Vec::new();
         let mut output_leaves: Vec<u32> = Vec::new();
+
+        // whether we leave off in the middle of parsing a phrase
         let mut parsing_in_progress = false;
 
         self.n += input.len();
@@ -63,9 +74,7 @@ impl<T: Sequence> StreamingEncoder<T> for StreamingLZ78Encoder {
             )?;
 
             start_idx = traversal_output.phrase_end_idx + 1;
-            self.total_log_loss += traversal_output.log_loss;
-
-            ref_idxs.push(self.tree.phrase_num(traversal_output.state_idx));
+            ref_idxs.push(traversal_output.state_idx);
             output_leaves.push(traversal_output.added_leaf.unwrap_or(0));
 
             if traversal_output.added_leaf.is_some() {
@@ -77,31 +86,38 @@ impl<T: Sequence> StreamingEncoder<T> for StreamingLZ78Encoder {
             }
         }
 
-        // encode
-        // compute output
         let mut n_output_bits = 0;
+
+        // the number of encoded bits, except perhaps for the final phrase (if
+        // the final phrase is not a full phrase)
         let mut n_output_bits_finished_phrases = 0;
         for i in 0..(output_leaves.len() as u64) {
             n_output_bits_finished_phrases = n_output_bits;
             n_output_bits +=
-                lz78_bits_to_encode_phrase(i + self.n_output_leaves, input.alphabet_size()) as u64;
+                lz78_bits_to_encode_phrase(i + self.n_phrases, input.alphabet_size()) as u64;
         }
 
-        let mut total_output_leaves = self.n_output_leaves + (output_leaves.len() - 1) as u64;
+        let mut n_full_phrases = self.n_phrases + (output_leaves.len() - 1) as u64;
         if !parsing_in_progress {
-            total_output_leaves += 1;
+            // the parsing ends right at the end of a phrase
+            n_full_phrases += 1;
             n_output_bits_finished_phrases = n_output_bits;
         }
 
+        // complete encoding
         self.encoded.set_uncompressed_len(self.n);
+        // if there was an unfinished phrase at th end of `self.encoded`,
+        // delete the bits corresponding to it, because it's included in the
+        // output of this block
         self.encoded.truncate(self.n_output_bits_finished_phrases);
+        // allocate memory once for performance reasons
         self.encoded.extend_capacity((n_output_bits + 7) / 8);
 
+        // Encoding, as per `lz78_encode`
         for (i, (leaf, ref_idx)) in output_leaves.into_iter().zip(ref_idxs).enumerate() {
-            let ref_idx = if let Some(x) = ref_idx { x + 1 } else { 0 };
             let bitwidth =
-                lz78_bits_to_encode_phrase(i as u64 + self.n_output_leaves, input.alphabet_size());
-            let val = if i == 0 && self.n_output_leaves == 0 {
+                lz78_bits_to_encode_phrase(i as u64 + self.n_phrases, input.alphabet_size());
+            let val = if i == 0 && self.n_phrases == 0 {
                 leaf as u64
             } else {
                 ref_idx * (input.alphabet_size() as u64) + (leaf as u64)
@@ -111,7 +127,7 @@ impl<T: Sequence> StreamingEncoder<T> for StreamingLZ78Encoder {
         }
 
         self.n_output_bits_finished_phrases += n_output_bits_finished_phrases;
-        self.n_output_leaves = total_output_leaves;
+        self.n_phrases = n_full_phrases;
 
         Ok(())
     }
@@ -125,23 +141,38 @@ impl<T: Sequence> StreamingEncoder<T> for StreamingLZ78Encoder {
     }
 }
 
+/// Interface for sequential probability assignments on data
 pub trait SPA {
+    /// Use a block of data to update the SPA. If `include_prev_context` is
+    /// true, then this block is considered to be from the same sequence as
+    /// the previous. Otherwise, it is assumed to be a separate sequence (e.g.,
+    /// for the LZ78 SPA, this means we start at the root of the tree).
     fn train_on_block<T: ?Sized>(&mut self, input: &T, include_prev_context: bool) -> Result<f64>
     where
         T: Sequence;
 
-    fn compute_test_loss<T: ?Sized>(&mut self, input: &T) -> Result<f64>
+    /// Given a fixed SPA, compute the log loss of that SPA on a test sequence
+    fn compute_test_loss<T: ?Sized>(
+        &mut self,
+        input: &T,
+        include_prev_context: bool,
+    ) -> Result<f64>
     where
         T: Sequence;
 
-    fn compute_test_loss_from_root<T: ?Sized>(&mut self, input: &T) -> Result<f64>
-    where
-        T: Sequence;
-
+    /// Computes the SPA for every symbol in the alphabet
     fn compute_spa_at_current_state(&self) -> Vec<f64>;
 
-    fn get_scaled_log_loss(&self) -> f64;
+    /// Returns the normaliized log loss from training the SPA
+    fn get_normalized_log_loss(&self) -> f64;
 
+    /// Generates a sequence of data, using temperature and top-k sampling.
+    /// For SPAs with the notion of a variable-length context, the `min_context`
+    /// parameter specifies that the SPA tries to maintain a context length
+    /// of at least a certain length.
+    ///
+    /// Using `seed_data`, you can specify that the sequence of generated data
+    /// be the continuation of the specified sequence.
     fn generate_data<T>(
         &mut self,
         output_seq: &mut T,
@@ -155,7 +186,8 @@ pub trait SPA {
         T: Sequence;
 }
 
-#[derive(Debug, Archive, Serialize, Deserialize)]
+/// LZ78 implementation of the sequential probability assignment
+#[derive(Debug)]
 pub struct LZ78SPA {
     tree: LZ78Tree,
     state: u64,
@@ -175,7 +207,8 @@ impl LZ78SPA {
         }
     }
 
-    /// Traverses the tree and returns the new state and loss
+    /// Traverses the tree  using a provided slice of the input sequence, and
+    /// returns a tuple of the new state and log loss
     fn compute_test_loss_on_slice_from_state<T: Sequence + ?Sized>(
         &mut self,
         input: &T,
@@ -195,7 +228,7 @@ impl LZ78SPA {
 
             start_idx = traversal_output.phrase_end_idx + 1;
             log_loss += traversal_output.log_loss;
-            state = if traversal_output.reached_leaf {
+            state = if self.tree.is_leaf(traversal_output.state_idx) {
                 LZ78Tree::ROOT_IDX
             } else {
                 traversal_output.state_idx
@@ -205,6 +238,10 @@ impl LZ78SPA {
         Ok((state, log_loss))
     }
 
+    /// Start at the provided state, traverse the tree using the provided
+    /// slice of the input sequence, stopping when we traverse past a leaf or
+    /// run to the end of the input slice. returns a tuple of the new state
+    /// (the root if we reached a leaf) and the log loss incurred
     fn maybe_traverse_once_to_leaf<T: Sequence>(
         &mut self,
         input: &T,
@@ -220,7 +257,7 @@ impl LZ78SPA {
             .traverse_to_leaf_from(state, input, start_idx, end_idx, false, false)?;
 
         log_loss += traversal_output.log_loss;
-        let state = if traversal_output.reached_leaf {
+        let state = if self.tree.is_leaf(traversal_output.state_idx) {
             LZ78Tree::ROOT_IDX
         } else {
             traversal_output.state_idx
@@ -230,9 +267,14 @@ impl LZ78SPA {
     }
 
     pub fn save_to_file(&self, path: String) -> Result<()> {
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.put_u64_le(self.n);
+        bytes.put_u64_le(self.state);
+        bytes.put_u32_le(self.alphabet_size);
+        bytes.put_f64_le(self.total_log_loss);
+        bytes.extend(self.tree.to_bytes());
+
         let mut file = File::create(path)?;
-        let mut bytes = rkyv::to_bytes::<_, 1024>(self)?;
-        println!("Saving SPA: {:.3} MB", bytes.len() as f64 / 1e6);
         file.write_all(&mut bytes)?;
 
         Ok(())
@@ -242,19 +284,36 @@ impl LZ78SPA {
         let mut file = File::open(path)?;
         let mut bytes: Vec<u8> = Vec::new();
         file.read_to_end(&mut bytes)?;
-        let archived = unsafe { rkyv::archived_root::<Self>(&bytes[..]) };
+        let mut bytes: Bytes = bytes.into();
+        let n = bytes.get_u64_le();
+        let state = bytes.get_u64_le();
+        let alphabet_size = bytes.get_u32_le();
+        let total_log_loss = bytes.get_f64_le();
+        let tree = LZ78Tree::from_bytes(&mut bytes);
 
-        Ok(archived.deserialize(&mut rkyv::Infallible).unwrap())
+        Ok(Self {
+            n,
+            state,
+            alphabet_size,
+            total_log_loss,
+            tree,
+        })
     }
 }
 
 impl SPA for LZ78SPA {
+    /// Same as the LZ78 encoding process, but: (1) we don't actually compute
+    /// the encoded bits, and (2) we compute the log loss incurred over the
+    /// course of this block. By default, the LZ78Tree keeps track of the
+    /// number of times each node was visited, which is sufficient to compute
+    /// the SPA
     fn train_on_block<T: ?Sized>(&mut self, input: &T, include_prev_context: bool) -> Result<f64>
     where
         T: Sequence,
     {
         let prev_log_loss = self.total_log_loss;
         if !include_prev_context {
+            // reset the state to the root of the tree
             self.state = LZ78Tree::ROOT_IDX;
         }
 
@@ -285,21 +344,22 @@ impl SPA for LZ78SPA {
         Ok((self.total_log_loss - prev_log_loss) / (input.len() as f64))
     }
 
-    fn compute_test_loss<T: ?Sized>(&mut self, input: &T) -> Result<f64>
+    /// Compute the loss of a test sequence on this SPA
+    fn compute_test_loss<T: ?Sized>(&mut self, input: &T, include_prev_context: bool) -> Result<f64>
     where
         T: Sequence,
     {
         Ok(self
-            .compute_test_loss_on_slice_from_state(input, self.state, 0, input.len())?
-            .1)
-    }
-
-    fn compute_test_loss_from_root<T: ?Sized>(&mut self, input: &T) -> Result<f64>
-    where
-        T: Sequence,
-    {
-        Ok(self
-            .compute_test_loss_on_slice_from_state(input, LZ78Tree::ROOT_IDX, 0, input.len())?
+            .compute_test_loss_on_slice_from_state(
+                input,
+                if include_prev_context {
+                    self.state
+                } else {
+                    LZ78Tree::ROOT_IDX
+                },
+                0,
+                input.len(),
+            )?
             .1)
     }
 
@@ -307,7 +367,7 @@ impl SPA for LZ78SPA {
         self.tree.compute_spa(self.state)
     }
 
-    fn get_scaled_log_loss(&self) -> f64 {
+    fn get_normalized_log_loss(&self) -> f64 {
         if self.n == 0 {
             0.0
         } else {
@@ -330,15 +390,20 @@ impl SPA for LZ78SPA {
         let mut log_loss: f64 = 0.0;
 
         let top_k = top_k.clamp(1, self.alphabet_size);
+
+        // by default, start at the current state of the SPA.
         let mut state = self.state;
 
         let mut rng = thread_rng();
+
+        // sample from the RNG once at the beginning for efficiency
         let samples = Uniform::new(0.0, 1.0)
             .sample_iter(&mut rng)
             .take(len as usize)
             .collect_vec();
 
         if let Some(data) = seed_data {
+            // traverse the tree using the seed data
             (state, log_loss) = self.compute_test_loss_on_slice_from_state(
                 data,
                 LZ78Tree::ROOT_IDX,
@@ -350,10 +415,15 @@ impl SPA for LZ78SPA {
         for sample_num in 0..len {
             // If we're at a place with no information (root or leaf), we need to
             // re-seed the SPA with some context
-
             if state == LZ78Tree::ROOT_IDX || self.tree.is_leaf(state) {
+                // keep on trying to re-seed the SPA: first start at min_context
+                // symbols from the end, and traverse the prefix tree. If we
+                // reach a leaf at any point, try with min_context - 1 symbols,
+                // and repeat until the traversal does not reach a leaf.
                 for k in (0..=min_context.min(sample_num)).rev() {
                     state = if k == 0 {
+                        // we completely failed to re-seed the SPA, so we give
+                        // up and generate the next symbol from the root
                         LZ78Tree::ROOT_IDX
                     } else {
                         self.maybe_traverse_once_to_leaf(
@@ -365,6 +435,7 @@ impl SPA for LZ78SPA {
                         .0
                     };
 
+                    // re-seeding was successful!
                     if !self.tree.is_leaf(state) && state != LZ78Tree::ROOT_IDX {
                         break;
                     }
@@ -377,6 +448,10 @@ impl SPA for LZ78SPA {
             let most_likely_next_sym = (0..self.alphabet_size)
                 .max_by(|i, j| spa[*i as usize].total_cmp(&spa[*j as usize]))
                 .unwrap();
+
+            // if temperature is 0.0, we just compute the argmax of the SPA. If
+            // temperature is 1.0, the symbols are generated directly from the
+            // SPA. In either case, we do not need the following computation.
             if temperature != 0.0 && temperature != 1.0 {
                 spa = spa
                     .iter()
@@ -384,7 +459,7 @@ impl SPA for LZ78SPA {
                     .collect_vec();
             }
 
-            // topk sampling
+            // top-k sampling
             (0..self.alphabet_size)
                 .sorted_by(|i, j| spa[*i as usize].total_cmp(&spa[*j as usize]))
                 .take((self.alphabet_size - top_k) as usize)
@@ -416,6 +491,7 @@ impl SPA for LZ78SPA {
 #[cfg(test)]
 mod tests {
     use crate::sequence::{BinarySequence, CharacterSequence, U16Sequence, U32Sequence};
+    use bitvec::prelude::*;
     use itertools::Itertools;
     use rand::{thread_rng, Rng};
 
@@ -465,22 +541,21 @@ mod tests {
 
     #[test]
     fn sanity_check_log_loss() {
-        let input =
-            BinarySequence::from_data(vec![0, 1].repeat(500)).expect("failed to create sequence");
+        let input = BinarySequence::from_data(bitvec![0, 1].repeat(500));
         let mut spa: LZ78SPA = LZ78SPA::new(2, 0.5);
         spa.train_on_block(&input, false)
             .expect("failed to train spa");
 
         let loss1 = spa
             .compute_test_loss(
-                &BinarySequence::from_data(vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1])
-                    .expect("failed to create sequence"),
+                &BinarySequence::from_data(bitvec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1]),
+                true,
             )
             .expect("failed to compute test loss");
         let loss2 = spa
             .compute_test_loss(
-                &BinarySequence::from_data(vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-                    .expect("failed to create sequence"),
+                &BinarySequence::from_data(bitvec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+                true,
             )
             .expect("failed to compute test loss");
 

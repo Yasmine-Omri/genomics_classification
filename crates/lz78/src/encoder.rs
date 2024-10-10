@@ -1,4 +1,6 @@
 use anyhow::Result;
+use bitvec::field::BitField;
+use bitvec::vec::BitVec;
 
 use crate::sequence::Sequence;
 use crate::tree::LZ78Tree;
@@ -7,13 +9,13 @@ use crate::tree::LZ78Tree;
 /// original sequence
 #[derive(Debug, Clone)]
 pub struct EncodedSequence {
-    data: BitStorage,
+    data: BitVec,
     pub uncompressed_length: u64,
     pub alphabet_size: u32,
 }
 
 impl EncodedSequence {
-    pub fn from_data(data: BitStorage, uncompressed_length: u64, alphabet_size: u32) -> Self {
+    pub fn from_data(data: BitVec, uncompressed_length: u64, alphabet_size: u32) -> Self {
         Self {
             data,
             uncompressed_length,
@@ -21,28 +23,34 @@ impl EncodedSequence {
         }
     }
 
+    /// This is only true if the uncompressed filesize is equal to the number
+    /// of symbols times log2(alphabet size). In other cases (e.g., unicode
+    /// text, where symbols can be from 1 to 4 bytes), you should divide the
+    /// compressed length by the known uncompressed size.
     pub fn compression_ratio(&self) -> f32 {
         if self.uncompressed_length == 0 {
             0.0
         } else {
-            (self.data.bit_len() as f32)
+            (self.data.len() as f32)
                 / (self.uncompressed_length as f32 * (self.alphabet_size as f32).log2())
         }
     }
 
     /// Length of the bitstream, rounded up to the nearest byte
     pub fn compressed_len_bytes(&self) -> u64 {
-        (self.data.bit_len() + 7) / 8
+        (self.data.len() as u64 + 7) / 8
     }
 
     // In-place, truncates the underlying compressed bitstream
     pub fn truncate(&mut self, num_bits: u64) {
-        self.data.truncate(num_bits);
+        self.data.drain(num_bits as usize..);
     }
 
     /// Pushes some bits to the bitstream
     pub fn push(&mut self, val: u64, bitwidth: u16) {
-        self.data.push(val, bitwidth)
+        let old_len = self.data.len();
+        self.data.resize(self.data.len() + bitwidth as usize, false);
+        self.data[old_len..].store(val);
     }
 
     pub fn set_uncompressed_len(&mut self, len: u64) {
@@ -50,16 +58,17 @@ impl EncodedSequence {
     }
 
     pub fn extend_capacity(&mut self, n: u64) {
-        self.data.extend_capacity(n);
+        self.data.reserve(n as usize);
     }
 
-    /// Returns a slice of the bitstream, as a byte array
-    pub fn get_raw(&self) -> &[u8] {
-        &self.data.data
+    /// Returns a reference to the underlying data array
+    pub fn get_raw(&self) -> &BitVec {
+        &self.data
     }
 }
 
-/// Generic interface for encoding and decoding
+/// Generic interface for encoding and decoding. Anything that implements
+/// this trait can be used to encode or decode sequences.
 pub trait Encoder {
     fn encode<T>(&self, input: &T) -> Result<EncodedSequence>
     where
@@ -70,15 +79,19 @@ pub trait Encoder {
         T: Sequence;
 }
 
-/// Interface for encoding blocks of a dataset in a streaming fashion
+/// Interface for encoding blocks of a dataset in a streaming fashion; i.e.,
+/// the input is passed in as several blocks.
 pub trait StreamingEncoder<T: Sequence> {
     fn encode_block(&mut self, input: &T) -> Result<()>;
 
+    /// Returns the encoded sequence, which is the compressed version of the
+    /// concatenation of all inputs to `encode_block`
     fn get_encoded_sequence(&self) -> &EncodedSequence;
 
     fn decode(&self, output: &mut T) -> Result<()>;
 }
 
+/// LZ78 encoder implementation
 pub struct LZ8Encoder {}
 
 impl Encoder for LZ8Encoder {
@@ -103,71 +116,6 @@ impl LZ8Encoder {
     }
 }
 
-/// Container for storing a bitstream, to which integers of arbitrary bitwidth
-/// can be pushed.
-#[derive(Debug, Clone)]
-pub struct BitStorage {
-    data: Vec<u8>,
-    /// number of bits, modulo 8, i.e., the number of bits that do not evenly
-    /// fit into a byte array. These are stored in the last index of `data`
-    overflow_len: u16,
-}
-
-impl BitStorage {
-    pub fn new() -> Self {
-        Self {
-            data: Vec::new(),
-            overflow_len: 0,
-        }
-    }
-
-    /// Extends the capacity of the underlying byte array; used for performance
-    /// reasons in streaming compression
-    pub fn extend_capacity(&mut self, n: u64) {
-        self.data.reserve(n as usize);
-    }
-
-    /// Push some bits to the bitstream
-    pub fn push(&mut self, val: u64, bitwidth: u16) {
-        let mut buffer = if self.overflow_len > 0 {
-            self.data.pop().unwrap_or(0)
-        } else {
-            0
-        } as u64;
-
-        buffer += val << self.overflow_len;
-        self.overflow_len += bitwidth;
-
-        while self.overflow_len >= 8 {
-            self.data.push((buffer & 0xFF) as u8);
-            buffer >>= 8;
-            self.overflow_len -= 8;
-        }
-        if self.overflow_len > 0 {
-            self.data.push(buffer as u8);
-        }
-    }
-
-    /// Trucates the bitstream to `num_bits` bits
-    pub fn truncate(&mut self, num_bits: u64) {
-        self.data.truncate(((num_bits + 7) / 8) as usize);
-        self.overflow_len = (num_bits % 8) as u16;
-        if self.overflow_len > 0 {
-            let t = self.data.len() - 1;
-            self.data[t] &= (1 << self.overflow_len) - 1;
-        }
-    }
-
-    /// Returns the number of bits being stored
-    pub fn bit_len(&self) -> u64 {
-        if self.overflow_len == 0 {
-            self.data.len() as u64 * 8
-        } else {
-            (self.data.len() as u64 - 1) * 8 + self.overflow_len as u64
-        }
-    }
-}
-
 /// returns the number of bits required to encode the specified phrase
 pub fn lz78_bits_to_encode_phrase(phrase_idx: u64, alpha_size: u32) -> u16 {
     (((phrase_idx + 1) as f64).log2() + (alpha_size as f64).log2()).ceil() as u16
@@ -178,10 +126,18 @@ pub fn lz78_encode<T>(input: &T) -> Result<EncodedSequence>
 where
     T: Sequence,
 {
+    // LZ78 prefix tree that is being built during the encoding process
     let mut tree: LZ78Tree = LZ78Tree::new(input.alphabet_size());
-    let mut ref_idxs: Vec<Option<u64>> = Vec::new();
+
+    // Every LZ78 phrase consists of a prefix that is a previously-seen phrase
+    // (using the convention that the "empty phrase" is the first phrase),
+    // plus one extra bit. The `ref_idxs` array indexes the phrase equal to the
+    // prefix.
+    let mut ref_idxs: Vec<u64> = Vec::new();
+    // `output_leaves` is the final bit of every phrase
     let mut output_leaves: Vec<u32> = Vec::new();
 
+    // The start of the current phrase
     let mut start_idx: u64 = 0;
 
     // Compute the LZ78 phrases and build the tree
@@ -192,32 +148,31 @@ where
 
         // Finds the previous phrase in the LZ78 parsing that forms the prefix
         // of the current phrase
-        ref_idxs.push(tree.phrase_num(traversal_result.state_idx));
+        ref_idxs.push(traversal_result.state_idx);
         // The last element of the current phrase
         output_leaves.push(traversal_result.added_leaf.unwrap_or(0));
         start_idx = traversal_result.phrase_end_idx + 1;
     }
 
-    // compute output
-    let mut bits = BitStorage::new();
-
     // compute number of bits we will need in total for the output
     let n_output_bits: u64 = (0..output_leaves.len())
         .map(|i| lz78_bits_to_encode_phrase(i as u64, input.alphabet_size()) as u64)
         .sum();
-    bits.extend_capacity((n_output_bits + 7) / 8);
 
-    // Encode each phrase in the bitarray
+    // compute output
+    let mut bits = BitVec::with_capacity(n_output_bits as usize);
+    bits.resize(n_output_bits as usize, false);
+
+    let mut prev_bit_idx = 0;
+
+    // Encode each phrase
     for (i, (leaf, ref_idx)) in output_leaves.into_iter().zip(ref_idxs).enumerate() {
-        let ref_idx = if let Some(x) = ref_idx { x + 1 } else { 0 };
         let bitwidth = lz78_bits_to_encode_phrase(i as u64, input.alphabet_size());
-        let val = if i == 0 {
-            leaf as u64
-        } else {
-            ref_idx * (input.alphabet_size() as u64) + (leaf as u64)
-        };
 
-        bits.push(val, bitwidth);
+        // value to encode, as per original LZ78 paper
+        let val: u64 = ref_idx * (input.alphabet_size() as u64) + (leaf as u64);
+        bits[prev_bit_idx..prev_bit_idx + bitwidth as usize].store(val);
+        prev_bit_idx += bitwidth as usize;
     }
 
     Ok(EncodedSequence::from_data(
@@ -232,63 +187,40 @@ pub fn lz78_decode<T>(output: &mut T, input: &EncodedSequence) -> Result<()>
 where
     T: Sequence,
 {
-    // the indices at which phrases start in the uncompressed sequence
-    let mut phrase_starts: Vec<u64> = Vec::new();
+    // the indices at which phrases start in the uncompressed sequence.
+    // The first phrase, by convention, is the empty phrase.
+    let mut phrase_starts: Vec<u64> = vec![0];
     // how long each phrase is (can be computed from phrase_starts, but this
-    // makes decoding easier)
-    let mut phrase_lengths: Vec<u64> = Vec::new();
+    // makes decoding easier).
+    let mut phrase_lengths: Vec<u64> = vec![0];
 
-    let mut bits_decoded: u64 = 0;
-    
-    let mut current_bit_offset: u16 = 0;
-
-    let mut input_idx = 0;
-    let raw_input = input.get_raw();
+    // number of bits that have been decoded so far
+    let mut bits_decoded: usize = 0;
 
     let alphabet_size = input.alphabet_size;
 
-    while bits_decoded < input.data.bit_len() {
-        let i = phrase_starts.len();
-        let mut bitwidth: i32 = lz78_bits_to_encode_phrase(i as u64, alphabet_size) as i32;
-        bits_decoded += bitwidth as u64;
+    while bits_decoded < input.data.len() {
+        // number of bits that were used to store the current phrase
+        let bitwidth: i32 =
+            lz78_bits_to_encode_phrase(phrase_starts.len() as u64 - 1, alphabet_size) as i32;
 
-        let mut decoded_val: u64 =
-            ((raw_input[input_idx] >> current_bit_offset) as u64) & ((1 << bitwidth) - 1);
-        input_idx += 1;
+        let decoded_val = input.data[bits_decoded..bits_decoded + bitwidth as usize].load::<u64>();
+        bits_decoded += bitwidth as usize;
 
-        // We read (8 - current_bit_offset) bits
-        bitwidth -= 8 - current_bit_offset as i32;
-
-        let mut write_offset = 8 - current_bit_offset;
-        current_bit_offset = 0;
-
-        while bitwidth > 0 {
-            decoded_val += (raw_input[input_idx] as u64 & ((1 << bitwidth) - 1)) << write_offset;
-            write_offset += 8;
-            bitwidth -= 8;
-            input_idx += 1;
-        }
-
-        if bitwidth < 0 {
-            current_bit_offset = (bitwidth + 8) as u16;
-            input_idx -= 1;
-        }
-
-        let mut ref_idx = decoded_val / (alphabet_size as u64);
+        // find the index of the previous phrase that forms the prefix of the
+        // current phrase
+        let ref_idx = decoded_val / (alphabet_size as u64);
+        // the final symbol of the phrase
         let new_sym = (decoded_val % (alphabet_size as u64)) as u32;
-        let mut phrase_len = 1;
 
         let phrase_start = output.len();
-        if ref_idx >= 1 {
-            ref_idx -= 1;
-            phrase_len = phrase_lengths[ref_idx as usize] + 1;
-            let copy_start = phrase_starts[ref_idx as usize];
+        let phrase_len = phrase_lengths[ref_idx as usize] + 1;
+        let copy_start = phrase_starts[ref_idx as usize];
 
-            for j in 0..phrase_len - 1 {
-                output.put_sym(output.get(copy_start + j)?);
-                if output.len() >= input.uncompressed_length {
-                    return Ok(());
-                }
+        for j in 0..phrase_len - 1 {
+            output.put_sym(output.try_get(copy_start + j)?);
+            if output.len() >= input.uncompressed_length {
+                return Ok(());
             }
         }
 
@@ -303,6 +235,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::sequence::{BinarySequence, CharacterMap, CharacterSequence, U8Sequence};
+    use bitvec::prelude::*;
     use itertools::Itertools;
     use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
 
@@ -310,10 +243,9 @@ mod tests {
 
     #[test]
     fn test_encode_decode_binary() {
-        let input = BinarySequence::from_data(vec![
+        let input = BinarySequence::from_data(bitvec![
             0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0,
-        ])
-        .expect("creating sequence failed");
+        ]);
         let encoder = LZ8Encoder::new();
         let encoded = encoder.encode(&input).expect("encoding failed");
 

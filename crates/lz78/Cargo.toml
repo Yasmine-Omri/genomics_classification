@@ -8,4 +8,5 @@ version = "0.1.0"
 anyhow.workspace = true
 rand.workspace = true
 itertools.workspace = true
-rkyv.workspace = true
+bitvec.workspace = true
+bytes.workspace = true

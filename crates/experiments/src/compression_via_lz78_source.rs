@@ -8,7 +8,7 @@ use itertools::Itertools;
 use lz78::{
     encoder::{Encoder, LZ8Encoder},
     sequence::U32Sequence,
-    source::{DefaultLZ78SourceNode, LZ78Source, SimplifiedBinarySourceNode},
+    source::{DefaultLZ78SourceNode, LZ78Source, DiscreteThetaBinarySourceNode},
 };
 use lz78_experiments::argparse::SourceCompressionCli;
 use rand::{thread_rng, Rng};
@@ -74,7 +74,7 @@ fn get_sequence_to_compress(cli: &SourceCompressionCli) -> Vec<u32> {
         lz78_experiments::argparse::DataGenerators::BernoulliLZ78Source => {
             let mut ber_src = LZ78Source::new(
                 2,
-                SimplifiedBinarySourceNode::new(vec![0.5, 0.5], vec![0., 1.], &mut thread_rng()),
+                DiscreteThetaBinarySourceNode::new(vec![0.5, 0.5], vec![0., 1.], &mut thread_rng()),
                 None,
             );
             ber_src

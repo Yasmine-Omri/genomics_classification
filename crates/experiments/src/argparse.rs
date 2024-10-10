@@ -123,7 +123,7 @@ pub struct SourceCompressionCli {
     pub max_thread: u64,
 }
 
-#[derive(ValueEnum, Clone, Copy)]
+#[derive(ValueEnum, Clone, Copy, PartialEq, Eq)]
 pub enum Datasets {
     #[value()]
     FashionMnist,
@@ -148,6 +148,9 @@ pub enum Datasets {
 
     #[value()]
     Shakespeare,
+
+    #[value()]
+    TinyStories,
 }
 
 #[derive(ValueEnum, Clone, Copy)]

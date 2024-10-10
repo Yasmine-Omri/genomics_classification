@@ -61,6 +61,19 @@ pub fn read_c4_realnewslike(c4_dir: &str, part: u64) -> Result<Vec<String>> {
     Ok(result)
 }
 
+pub fn read_tinystories(ts_dir: &str) -> Result<Vec<String>> {
+    let path = format!("{ts_dir}/TinyStories-train.txt");
+    let mut file = File::open(path)?;
+    let mut s = String::new();
+    file.read_to_string(&mut s)?;
+    let mut result: Vec<String> = Vec::new();
+    for line in s.splitn(s.len(), "\n<|endoftext|>\n") {
+        result.push(line.to_owned());
+    }
+
+    Ok(result)
+}
+
 pub fn read_wikitext(wikitext_dir: &str) -> Result<Vec<String>> {
     let mut result: Vec<String> = Vec::new();
     let paths = vec![

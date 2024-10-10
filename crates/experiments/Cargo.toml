@@ -14,7 +14,6 @@ lz78.workspace = true
 clap.workspace = true
 flate2.workspace = true
 jzon.workspace = true
-rkyv.workspace = true
 rayon.workspace = true
 ndarray.workspace = true
 bytes.workspace = true
@@ -39,6 +38,10 @@ path = "src/compression_fixed_lz78_source.rs"
 [[bin]]
 name = "encode-decode"
 path = "src/encode_decode.rs"
+
+[[bin]]
+name = "compress"
+path = "src/compress.rs"
 
 [[bin]]
 name = "classify"
