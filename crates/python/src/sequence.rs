@@ -1,5 +1,9 @@
 use lz78::sequence::{CharacterSequence, Sequence as Sequence_LZ78, U32Sequence, U8Sequence};
-use pyo3::{exceptions::PyAssertionError, prelude::*};
+use pyo3::{
+    exceptions::PyAssertionError,
+    prelude::*,
+    types::{PyList, PySlice},
+};
 
 #[derive(Clone)]
 pub enum SequenceType {
@@ -43,27 +47,53 @@ pub struct Sequence {
 #[pymethods]
 impl Sequence {
     #[new]
-    #[pyo3(signature = (alphabet_size, data=None))]
-    pub fn new<'py>(alphabet_size: u32, data: Option<Bound<'py, PyAny>>) -> PyResult<Self> {
-        if let Some(obj) = data {
-            if alphabet_size <= 256 {
+    #[pyo3(signature = (data, alphabet_size=None, charmap=None))]
+    pub fn new<'py>(
+        data: Bound<'py, PyAny>,
+        alphabet_size: Option<u32>,
+        charmap: Option<CharacterMap>,
+    ) -> PyResult<Self> {
+        // check if this is a string
+        let maybe_input_string = data.extract::<String>();
+        if charmap.is_some() || maybe_input_string.is_ok() {
+            if let Some(cmap) = charmap {
                 return Ok(Self {
-                    sequence: SequenceType::U8(U8Sequence::from_data(
-                        obj.extract::<Vec<u8>>()?,
-                        alphabet_size,
+                    sequence: SequenceType::Char(CharacterSequence::from_data(
+                        maybe_input_string.unwrap(),
+                        cmap.map,
                     )?),
                 });
             } else {
                 return Ok(Self {
-                    sequence: SequenceType::U32(U32Sequence::from_data(
-                        obj.extract::<Vec<u32>>()?,
-                        alphabet_size,
-                    )?),
+                    sequence: SequenceType::Char(
+                        CharacterSequence::from_data_inferred_character_map(
+                            maybe_input_string.unwrap(),
+                        ),
+                    ),
                 });
             }
         }
 
-        todo!()
+        let alphabet_size = match alphabet_size {
+            Some(x) => x,
+            None => data.extract::<Vec<u32>>()?.into_iter().max().unwrap_or(0) + 1,
+        };
+
+        if alphabet_size <= 256 {
+            return Ok(Self {
+                sequence: SequenceType::U8(U8Sequence::from_data(
+                    data.extract::<Vec<u8>>()?,
+                    alphabet_size,
+                )?),
+            });
+        } else {
+            return Ok(Self {
+                sequence: SequenceType::U32(U32Sequence::from_data(
+                    data.extract::<Vec<u32>>()?,
+                    alphabet_size,
+                )?),
+            });
+        }
     }
 
     pub fn extend<'py>(&mut self, data: Bound<'py, PyAny>) -> PyResult<()> {
@@ -72,7 +102,10 @@ impl Sequence {
                 let new_seq = data.extract::<Vec<u8>>()?;
                 u8_sequence.extend(&new_seq)?;
             }
-            SequenceType::Char(character_sequence) => todo!(),
+            SequenceType::Char(character_sequence) => {
+                let new_seq = data.extract::<String>()?;
+                character_sequence.extend(&new_seq)?;
+            }
             SequenceType::U32(u32_sequence) => {
                 let new_seq = data.extract::<Vec<u32>>()?;
                 u32_sequence.extend(&new_seq)?;
@@ -90,16 +123,58 @@ impl Sequence {
         self.sequence.len() as usize
     }
 
-    fn __getitem__(&self, i: usize) -> PyResult<u32> {
-        self.sequence.get(i as u64)
-    }
+    fn __getitem__<'py>(&self, py: Python<'py>, i: Bound<'py, PyAny>) -> PyResult<PyObject> {
+        if let Ok(i) = i.extract::<isize>() {
+            let i = if i < 0 {
+                (self.__len__() as isize + i) as u64
+            } else {
+                i as u64
+            };
+            return Ok(self.sequence.get(i)?.to_object(py));
+        } else if i.is_instance_of::<PySlice>() {
+            // handle indexing by a slice
+            let res = PyList::empty_bound(py);
 
-    // #[pyo3(signature = (start_idx=None, end_idx=None))]
-    // fn get_data(&self, start_idx: Option<u64>, end_idx: Option<u64>) -> PyResult<Vec<u8>> {
-    //     let start_idx = start_idx.unwrap_or(0);
-    //     let end_idx = end_idx.unwrap_or(self.len()? as u64);
-    //     Ok(self.sequence.data[start_idx as usize..end_idx as usize].to_vec())
-    // }
+            // start defaults to 0
+            let mut start = if i.getattr("start")?.is_none() {
+                0
+            } else {
+                i.getattr("start")?.extract::<isize>()?
+            };
+            if start < 0 {
+                start = self.__len__() as isize - start;
+            }
+
+            // stop defaults to the end of the sequence
+            let mut stop = if i.getattr("stop")?.is_none() {
+                self.__len__() as isize
+            } else {
+                i.getattr("stop")?.extract::<isize>()?
+            };
+            if stop < 0 {
+                stop = self.__len__() as isize - stop;
+            }
+
+            // step defaults to 1
+            let step = if i.getattr("step")?.is_none() {
+                1
+            } else {
+                i.getattr("step")?.extract::<isize>()?
+            };
+
+            for idx in (start..stop).step_by(step.abs() as usize) {
+                res.append(self.sequence.get(idx as u64)?)?;
+            }
+            if step < 0 {
+                res.reverse()?;
+            }
+
+            return Ok(res.unbind().into_any());
+        }
+        Err(PyAssertionError::new_err(
+            "Expected a slice or integer index",
+        ))
+    }
 }
 
 #[pyclass]
@@ -122,6 +197,10 @@ impl CharacterMap {
             .map
             .encode(&char)
             .ok_or(PyAssertionError::new_err("could not encode character"))?)
+    }
+
+    fn encode_all(&self, s: String) -> PyResult<Vec<u32>> {
+        Ok(self.map.try_encode_all(&s)?)
     }
 
     fn decode(&self, sym: u32) -> PyResult<String> {

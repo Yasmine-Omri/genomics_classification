@@ -123,7 +123,7 @@ impl CharacterMap {
         for char in data.chars() {
             res.push(
                 self.encode(&char.to_string())
-                    .ok_or(anyhow!("invalid char"))?,
+                    .ok_or(anyhow!("Character \"{char}\" not in mapping"))?,
             );
         }
         Ok(res)
@@ -280,6 +280,14 @@ impl CharacterSequence {
             data,
             character_map,
         }
+    }
+
+    pub fn extend(&mut self, data: &String) -> Result<()> {
+        let encoded = self.character_map.try_encode_all(data)?;
+        self.data.push_str(&data);
+        self.encoded.extend(encoded);
+
+        Ok(())
     }
 }
 
