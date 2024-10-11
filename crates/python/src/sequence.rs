@@ -210,7 +210,15 @@ impl CharacterMap {
             .ok_or(PyAssertionError::new_err("could not decode character"))?)
     }
 
+    fn decode_all(&self, syms: Vec<u32>) -> PyResult<String> {
+        Ok(self.map.try_decode_all(syms)?)
+    }
+
     fn filter_string(&self, data: String) -> PyResult<String> {
         Ok(self.map.filter_string(&data))
+    }
+
+    pub fn alphabet_size(&self) -> PyResult<u32> {
+        Ok(self.map.alphabet_size)
     }
 }

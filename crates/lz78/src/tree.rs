@@ -20,7 +20,7 @@ use std::collections::HashMap;
 /// would have `branch_idxs = {0 -> 1, 1 -> 3}``, the node "0" would have
 /// `branch_idxs = {0 -> 2, 1 -> 4}, and the node "1" would have
 /// `branch_idxs = {1 -> 5}`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LZ78TreeNode {
     /// The number of times this node has been visited. Used for computing the
     /// sequential probability assignment
@@ -65,7 +65,7 @@ impl LZ78TreeNode {
 /// well as metadata like the SPA parameter and alphabet size. See the
 /// documentation of LZ78TreeNode for a detailed description (+example) of the
 /// `nodes` array and how the tree structure is encoded.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LZ78Tree {
     /// List of all nodes in the LZ78 tree, in the order in which they were
     /// parsed

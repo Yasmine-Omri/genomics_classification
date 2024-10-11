@@ -18,6 +18,7 @@ use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
 /// Streaming LZ78 encoder: you can pass in the input sequence to be compressed
 /// in chunks, and the output (`encoder.get_encoded_sequence()`) is as if the
 /// full concatenated sequence was passed in to an LZ78 encoder
+#[derive(Clone)]
 pub struct StreamingLZ78Encoder {
     /// Current encoded sequence
     encoded: EncodedSequence,
@@ -50,9 +51,12 @@ impl StreamingLZ78Encoder {
     }
 }
 
-impl<T: Sequence> StreamingEncoder<T> for StreamingLZ78Encoder {
+impl StreamingEncoder for StreamingLZ78Encoder {
     /// Encode a block of the input using LZ78 and update `self.encoded`
-    fn encode_block(&mut self, input: &T) -> Result<()> {
+    fn encode_block<T>(&mut self, input: &T) -> Result<()>
+    where
+        T: Sequence,
+    {
         let mut start_idx = 0;
 
         let mut ref_idxs: Vec<u64> = Vec::new();
@@ -136,7 +140,10 @@ impl<T: Sequence> StreamingEncoder<T> for StreamingLZ78Encoder {
         &self.encoded
     }
 
-    fn decode(&self, output: &mut T) -> Result<()> {
+    fn decode<T>(&self, output: &mut T) -> Result<()>
+    where
+        T: Sequence,
+    {
         lz78_decode(output, &self.encoded)
     }
 }

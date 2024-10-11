@@ -81,14 +81,18 @@ pub trait Encoder {
 
 /// Interface for encoding blocks of a dataset in a streaming fashion; i.e.,
 /// the input is passed in as several blocks.
-pub trait StreamingEncoder<T: Sequence> {
-    fn encode_block(&mut self, input: &T) -> Result<()>;
+pub trait StreamingEncoder {
+    fn encode_block<T>(&mut self, input: &T) -> Result<()>
+    where
+        T: Sequence;
 
     /// Returns the encoded sequence, which is the compressed version of the
     /// concatenation of all inputs to `encode_block`
     fn get_encoded_sequence(&self) -> &EncodedSequence;
 
-    fn decode(&self, output: &mut T) -> Result<()>;
+    fn decode<T>(&self, output: &mut T) -> Result<()>
+    where
+        T: Sequence;
 }
 
 /// LZ78 encoder implementation

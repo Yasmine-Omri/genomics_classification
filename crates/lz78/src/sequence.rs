@@ -153,6 +153,17 @@ impl CharacterMap {
         }
     }
 
+    pub fn try_decode_all(&self, syms: Vec<u32>) -> Result<String> {
+        let mut res = String::new();
+        for sym in syms {
+            res.push_str(&self.decode(sym).ok_or(anyhow!(
+                "Symbol larger than alphabet size of {}",
+                self.alphabet_size
+            ))?);
+        }
+        Ok(res)
+    }
+
     pub fn save_to_file(&self, path: String) -> Result<()> {
         let mut file = File::create(path)?;
         let mut bytes: Vec<u8> = Vec::new();
