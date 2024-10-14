@@ -68,7 +68,7 @@ impl BinarySequence {
 /// Maps characters in a string to u32 values in a contiguous range, so that a
 /// string can be used as an individual sequence. The string must be valid
 /// UTF-8 to construct a CharacterMap.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CharacterMap {
     /// Maps characters to the corresponding integer value
     char_to_sym: HashMap<String, u32>,
@@ -164,8 +164,7 @@ impl CharacterMap {
         Ok(res)
     }
 
-    pub fn save_to_file(&self, path: String) -> Result<()> {
-        let mut file = File::create(path)?;
+    pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes: Vec<u8> = Vec::new();
         bytes.put_u32_le(self.alphabet_size);
 
@@ -178,17 +177,19 @@ impl CharacterMap {
         for s in self.sym_to_char.iter() {
             bytes.extend(s.as_bytes());
         }
+
+        bytes
+    }
+
+    pub fn save_to_file(&self, path: String) -> Result<()> {
+        let mut file = File::create(path)?;
+        let mut bytes = self.to_bytes();
         file.write_all(&mut bytes)?;
 
         Ok(())
     }
 
-    pub fn from_file(path: String) -> Result<Self> {
-        let mut file = File::open(path)?;
-        let mut bytes: Vec<u8> = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        let mut bytes: Bytes = bytes.into();
-
+    pub fn from_bytes(bytes: &mut Bytes) -> Result<Self> {
         let alphabet_size = bytes.get_u32_le();
 
         // get the number of bytes forming each character
@@ -213,6 +214,14 @@ impl CharacterMap {
             sym_to_char,
             alphabet_size,
         })
+    }
+
+    pub fn from_file(path: String) -> Result<Self> {
+        let mut file = File::open(path)?;
+        let mut bytes: Vec<u8> = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        let mut bytes: Bytes = bytes.into();
+        Self::from_bytes(&mut bytes)
     }
 }
 

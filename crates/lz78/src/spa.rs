@@ -273,13 +273,18 @@ impl LZ78SPA {
         Ok((state, log_loss))
     }
 
-    pub fn save_to_file(&self, path: String) -> Result<()> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut bytes: Vec<u8> = Vec::new();
         bytes.put_u64_le(self.n);
         bytes.put_u64_le(self.state);
         bytes.put_u32_le(self.alphabet_size);
         bytes.put_f64_le(self.total_log_loss);
         bytes.extend(self.tree.to_bytes());
+        Ok(bytes)
+    }
+
+    pub fn save_to_file(&self, path: String) -> Result<()> {
+        let mut bytes = self.to_bytes()?;
 
         let mut file = File::create(path)?;
         file.write_all(&mut bytes)?;
@@ -287,16 +292,12 @@ impl LZ78SPA {
         Ok(())
     }
 
-    pub fn from_file(path: String) -> Result<Self> {
-        let mut file = File::open(path)?;
-        let mut bytes: Vec<u8> = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        let mut bytes: Bytes = bytes.into();
+    pub fn from_bytes(bytes: &mut Bytes) -> Result<Self> {
         let n = bytes.get_u64_le();
         let state = bytes.get_u64_le();
         let alphabet_size = bytes.get_u32_le();
         let total_log_loss = bytes.get_f64_le();
-        let tree = LZ78Tree::from_bytes(&mut bytes);
+        let tree = LZ78Tree::from_bytes(bytes);
 
         Ok(Self {
             n,
@@ -305,6 +306,14 @@ impl LZ78SPA {
             total_log_loss,
             tree,
         })
+    }
+
+    pub fn from_file(path: String) -> Result<Self> {
+        let mut file = File::open(path)?;
+        let mut bytes: Vec<u8> = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        let mut bytes: Bytes = bytes.into();
+        Self::from_bytes(&mut bytes)
     }
 }
 

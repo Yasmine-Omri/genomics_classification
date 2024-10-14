@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bitvec::field::BitField;
 use bitvec::vec::BitVec;
+use bytes::{Buf, BufMut, Bytes};
 
 use crate::sequence::Sequence;
 use crate::tree::LZ78Tree;
@@ -50,7 +51,7 @@ impl EncodedSequence {
     pub fn push(&mut self, val: u64, bitwidth: u16) {
         let old_len = self.data.len();
         self.data.resize(self.data.len() + bitwidth as usize, false);
-        self.data[old_len..].store(val);
+        self.data[old_len..].store_le(val);
     }
 
     pub fn set_uncompressed_len(&mut self, len: u64) {
@@ -64,6 +65,38 @@ impl EncodedSequence {
     /// Returns a reference to the underlying data array
     pub fn get_raw(&self) -> &BitVec {
         &self.data
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.put_u32_le(self.alphabet_size);
+        bytes.put_u64_le(self.uncompressed_length);
+        bytes.put_u64_le(self.data.len() as u64);
+        for chunk in self.data.chunks(8) {
+            bytes.put_u8(chunk.load_le::<u8>())
+        }
+
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &mut Bytes) -> Self {
+        let alphabet_size = bytes.get_u32_le();
+        let uncompressed_length = bytes.get_u64_le();
+        let data_len = bytes.get_u64_le();
+
+        let mut data = BitVec::with_capacity(data_len as usize);
+        data.resize(data_len as usize, false);
+        let mut i = 0;
+        while bytes.len() > 0 {
+            data[i..(data_len as usize).min(i + 8)].store_le::<u8>(bytes.get_u8());
+            i += 8;
+        }
+
+        Self {
+            alphabet_size,
+            uncompressed_length,
+            data,
+        }
     }
 }
 
@@ -175,7 +208,7 @@ where
 
         // value to encode, as per original LZ78 paper
         let val: u64 = ref_idx * (input.alphabet_size() as u64) + (leaf as u64);
-        bits[prev_bit_idx..prev_bit_idx + bitwidth as usize].store(val);
+        bits[prev_bit_idx..prev_bit_idx + bitwidth as usize].store_le(val);
         prev_bit_idx += bitwidth as usize;
     }
 
@@ -208,7 +241,8 @@ where
         let bitwidth: i32 =
             lz78_bits_to_encode_phrase(phrase_starts.len() as u64 - 1, alphabet_size) as i32;
 
-        let decoded_val = input.data[bits_decoded..bits_decoded + bitwidth as usize].load::<u64>();
+        let decoded_val =
+            input.data[bits_decoded..bits_decoded + bitwidth as usize].load_le::<u64>();
         bits_decoded += bitwidth as usize;
 
         // find the index of the previous phrase that forms the prefix of the
@@ -301,5 +335,30 @@ mod tests {
             .decode(&mut output, &encoded)
             .expect("decoding failed");
         assert_eq!(input.data, output.data);
+    }
+
+    #[test]
+    fn test_encoded_sequence_to_from_bytes() {
+        let alphabet_size = 100;
+        let n = 500;
+
+        let mut rng = thread_rng();
+        let input = U8Sequence::from_data(
+            Uniform::new(0, alphabet_size)
+                .sample_iter(&mut rng)
+                .take(n as usize)
+                .collect_vec(),
+            alphabet_size as u32,
+        )
+        .expect("creating sequence failed");
+
+        let encoder = LZ8Encoder::new();
+        let encoded = encoder.encode(&input).expect("encoding failed");
+
+        let mut bytes: Bytes = encoded.to_bytes().into();
+        let encoded_hat = EncodedSequence::from_bytes(&mut bytes);
+        assert_eq!(encoded.alphabet_size, encoded_hat.alphabet_size);
+        assert_eq!(encoded.uncompressed_length, encoded_hat.uncompressed_length);
+        assert_eq!(encoded.data, encoded_hat.data);
     }
 }

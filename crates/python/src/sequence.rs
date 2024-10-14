@@ -1,3 +1,5 @@
+use anyhow::bail;
+use bytes::{Buf, BufMut, Bytes};
 use lz78::sequence::{CharacterSequence, Sequence as Sequence_LZ78, U32Sequence, U8Sequence};
 use pyo3::{
     exceptions::PyAssertionError,
@@ -35,6 +37,102 @@ impl SequenceType {
             SequenceType::Char(character_sequence) => character_sequence.try_get(i)?,
             SequenceType::U32(u32_sequence) => u32_sequence.try_get(i)?,
         })
+    }
+
+    pub fn type_string(&self) -> String {
+        match self {
+            SequenceType::U8(_) => format!(
+                "Byte (U8) Sequence with alphabet size {}",
+                self.alphabet_size()
+            ),
+            SequenceType::Char(c) => format!(
+                "String Sequence with character mapping {:?}",
+                c.character_map.sym_to_char
+            ),
+            SequenceType::U32(_) => format!(
+                "Integer (U32) Sequence with alphabet size {}",
+                self.alphabet_size()
+            ),
+        }
+    }
+
+    pub fn assert_types_match(&self, other: &SequenceType) -> anyhow::Result<()> {
+        match self {
+            SequenceType::U8(_) => {
+                if let SequenceType::U8(_) = other {
+                    if self.alphabet_size() == other.alphabet_size() {
+                        return Ok(());
+                    }
+                }
+                bail!(
+                    "Expected {}, got {}",
+                    self.type_string(),
+                    other.type_string()
+                )
+            }
+            SequenceType::Char(c) => {
+                if let SequenceType::Char(c2) = other {
+                    if c.character_map == c2.character_map {
+                        return Ok(());
+                    }
+                }
+                bail!(
+                    "Expected {}, got {}",
+                    self.type_string(),
+                    other.type_string()
+                )
+            }
+            SequenceType::U32(_) => {
+                if let SequenceType::U32(_) = other {
+                    if self.alphabet_size() == other.alphabet_size() {
+                        return Ok(());
+                    }
+                }
+                bail!(
+                    "Expected {}, got {}",
+                    self.type_string(),
+                    other.type_string()
+                )
+            }
+        }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes: Vec<u8> = Vec::new();
+        match self {
+            SequenceType::U8(u8_sequence) => {
+                bytes.put_u8(0);
+                bytes.put_u32_le(u8_sequence.alphabet_size());
+            }
+            SequenceType::Char(character_sequence) => {
+                bytes.put_u8(1);
+                bytes.extend(character_sequence.character_map.to_bytes());
+            }
+            SequenceType::U32(u32_sequence) => {
+                bytes.put_u8(2);
+                bytes.put_u32_le(u32_sequence.alphabet_size());
+            }
+        }
+
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &mut Bytes) -> anyhow::Result<Self> {
+        match bytes.get_u8() {
+            0 => {
+                let alphabet_size = bytes.get_u32_le();
+                Ok(Self::U8(U8Sequence::new(alphabet_size)))
+            }
+            1 => {
+                let charmap = lz78::sequence::CharacterMap::from_bytes(bytes)?;
+                Ok(Self::Char(CharacterSequence::new(charmap)))
+            }
+            2 => {
+                let alphabet_size = bytes.get_u32_le();
+                Ok(Self::U32(U32Sequence::new(alphabet_size)))
+            }
+            _ => bail!("error parsing SequenceType"),
+        }
     }
 }
 
@@ -119,6 +217,14 @@ impl Sequence {
         Ok(self.sequence.alphabet_size())
     }
 
+    pub fn get_data(&self, py: Python) -> PyObject {
+        match &self.sequence {
+            SequenceType::U8(u8_sequence) => u8_sequence.data.to_object(py),
+            SequenceType::Char(character_sequence) => character_sequence.data.to_object(py),
+            SequenceType::U32(u32_sequence) => u32_sequence.data.to_object(py),
+        }
+    }
+
     fn __len__(&self) -> usize {
         self.sequence.len() as usize
     }
@@ -142,7 +248,7 @@ impl Sequence {
                 i.getattr("start")?.extract::<isize>()?
             };
             if start < 0 {
-                start = self.__len__() as isize - start;
+                start = self.__len__() as isize + start;
             }
 
             // stop defaults to the end of the sequence
@@ -152,7 +258,7 @@ impl Sequence {
                 i.getattr("stop")?.extract::<isize>()?
             };
             if stop < 0 {
-                stop = self.__len__() as isize - stop;
+                stop = self.__len__() as isize + stop;
             }
 
             // step defaults to 1

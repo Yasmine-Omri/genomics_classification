@@ -1,8 +1,9 @@
+use bytes::Bytes;
 use lz78::{
     encoder::{Encoder, StreamingEncoder},
     sequence::{CharacterSequence, Sequence as Sequence_LZ78, U32Sequence, U8Sequence},
 };
-use pyo3::{exceptions::PyAssertionError, prelude::*};
+use pyo3::{exceptions::PyAssertionError, prelude::*, types::PyBytes};
 
 use crate::{sequence::SequenceType, Sequence};
 
@@ -20,11 +21,26 @@ impl EncodedSequence {
         Ok(self.encoded_sequence.compression_ratio())
     }
 
-    pub fn get_raw(&self) -> PyResult<Vec<usize>> {
-        let mut v = self.encoded_sequence.get_raw().to_owned();
-        v.force_align();
-        Ok(v.into_vec())
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        let mut bytes = self.encoded_sequence.to_bytes();
+        bytes.extend(self.empty_seq_of_correct_datatype.to_bytes());
+        PyBytes::new_bound(py, &bytes)
     }
+}
+
+#[pyfunction]
+pub fn encoded_sequence_from_bytes<'py>(
+    bytes: Py<PyBytes>,
+    py: Python<'py>,
+) -> PyResult<EncodedSequence> {
+    let mut bytes: Bytes = bytes.as_bytes(py).to_owned().into();
+    let encoded_sequence = lz78::encoder::EncodedSequence::from_bytes(&mut bytes);
+    let empty_seq_of_correct_datatype = SequenceType::from_bytes(&mut bytes)?;
+
+    Ok(EncodedSequence {
+        encoded_sequence,
+        empty_seq_of_correct_datatype,
+    })
 }
 
 #[pyclass]
