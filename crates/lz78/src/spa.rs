@@ -357,7 +357,7 @@ impl SPA for LZ78SPA {
             }
         }
 
-        Ok((self.total_log_loss - prev_log_loss) / (input.len() as f64))
+        Ok(self.total_log_loss - prev_log_loss)
     }
 
     /// Compute the loss of a test sequence on this SPA
@@ -492,7 +492,7 @@ impl SPA for LZ78SPA {
             } else {
                 sample_from_pdf(&spa, samples[sample_num as usize]) as u32
             };
-            output_seq.put_sym(new_sym);
+            output_seq.put_sym(new_sym)?;
 
             let new_log_loss;
             (state, new_log_loss) =
@@ -500,7 +500,7 @@ impl SPA for LZ78SPA {
             log_loss += new_log_loss;
         }
 
-        Ok(log_loss / (len as f64))
+        Ok(log_loss)
     }
 }
 

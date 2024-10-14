@@ -87,7 +87,7 @@ impl EncodedSequence {
         let mut data = BitVec::with_capacity(data_len as usize);
         data.resize(data_len as usize, false);
         let mut i = 0;
-        while bytes.len() > 0 {
+        for _ in 0..(data_len + 7) / 8 {
             data[i..(data_len as usize).min(i + 8)].store_le::<u8>(bytes.get_u8());
             i += 8;
         }
@@ -256,13 +256,13 @@ where
         let copy_start = phrase_starts[ref_idx as usize];
 
         for j in 0..phrase_len - 1 {
-            output.put_sym(output.try_get(copy_start + j)?);
+            output.put_sym(output.try_get(copy_start + j)?)?;
             if output.len() >= input.uncompressed_length {
                 return Ok(());
             }
         }
 
-        output.put_sym(new_sym);
+        output.put_sym(new_sym)?;
         phrase_lengths.push(phrase_len);
         phrase_starts.push(phrase_start);
     }
@@ -355,7 +355,13 @@ mod tests {
         let encoder = LZ8Encoder::new();
         let encoded = encoder.encode(&input).expect("encoding failed");
 
-        let mut bytes: Bytes = encoded.to_bytes().into();
+        let mut bytes = encoded.to_bytes();
+        // add some random bytes to the end because this shouldn't affect
+        // decoding
+        bytes.extend(vec![
+            0, 1, 1, 0, 1, 1, 1, 43, 56, 128, 32, 255, 123, 6, 7, 8,
+        ]);
+        let mut bytes: Bytes = bytes.into();
         let encoded_hat = EncodedSequence::from_bytes(&mut bytes);
         assert_eq!(encoded.alphabet_size, encoded_hat.alphabet_size);
         assert_eq!(encoded.uncompressed_length, encoded_hat.uncompressed_length);

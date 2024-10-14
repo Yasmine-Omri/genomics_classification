@@ -24,10 +24,6 @@ name = "generate"
 path = "src/generate.rs"
 
 [[bin]]
-name = "main"
-path = "src/main.rs"
-
-[[bin]]
 name = "train"
 path = "src/train.rs"
 

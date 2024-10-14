@@ -21,7 +21,7 @@ pub trait Sequence: Sync {
 
     /// Puts a u32 symbol into the array. This does not check if the symbol
     /// is less than the alphabet size, but maybe it should.
-    fn put_sym(&mut self, sym: u32);
+    fn put_sym(&mut self, sym: u32) -> Result<()>;
 }
 
 /// Stored a binary sequence as a BitVec
@@ -45,8 +45,13 @@ impl Sequence for BinarySequence {
         Ok(self.data[i as usize] as u32)
     }
 
-    fn put_sym(&mut self, sym: u32) {
+    fn put_sym(&mut self, sym: u32) -> Result<()> {
+        if sym > 1 {
+            bail!("Invalid symbol {sym} for binary sequence")
+        }
         self.data.push(sym != 0);
+
+        Ok(())
     }
 }
 
@@ -71,9 +76,9 @@ impl BinarySequence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CharacterMap {
     /// Maps characters to the corresponding integer value
-    char_to_sym: HashMap<String, u32>,
+    char_to_sym: HashMap<char, u32>,
     /// Maps integer values to the corresponding character
-    pub sym_to_char: Vec<String>,
+    pub sym_to_char: Vec<char>,
     pub alphabet_size: u32,
 }
 
@@ -81,19 +86,18 @@ impl CharacterMap {
     /// Creates a CharacterMap consisting of all the unique characters found in
     /// `data`, in the order that they appear in the string.
     pub fn from_data(data: &String) -> Self {
-        let mut char_to_sym: HashMap<String, u32> = HashMap::new();
+        let mut char_to_sym: HashMap<char, u32> = HashMap::new();
         // hashset of the characters seen so far, so that we can figure out if
         // a character is already present in the charactermap
-        let mut charset: HashSet<String> = HashSet::new();
-        let mut sym_to_char: Vec<String> = Vec::new();
+        let mut charset: HashSet<char> = HashSet::new();
+        let mut sym_to_char: Vec<char> = Vec::new();
 
         let mut alphabet_size = 0;
 
-        for char in data.chars() {
-            let key = char.to_string();
+        for key in data.chars() {
             if !charset.contains(&key) {
                 // character hasn't been seen before
-                char_to_sym.insert(key.clone(), alphabet_size);
+                char_to_sym.insert(key, alphabet_size);
                 charset.insert(key.clone());
                 sym_to_char.push(key);
                 alphabet_size += 1;
@@ -108,9 +112,9 @@ impl CharacterMap {
     }
 
     /// Returns the integer value corresponding to the single input character
-    pub fn encode(&self, char: &String) -> Option<u32> {
-        if self.char_to_sym.contains_key(char) {
-            Some(self.char_to_sym[char])
+    pub fn encode(&self, char: char) -> Option<u32> {
+        if self.char_to_sym.contains_key(&char) {
+            Some(self.char_to_sym[&char])
         } else {
             None
         }
@@ -119,11 +123,11 @@ impl CharacterMap {
     /// Loops through all characters in the string, and encodes each one,
     /// returning an error if any character is not found in the mapping.
     pub fn try_encode_all(&self, data: &String) -> Result<Vec<u32>> {
-        let mut res = Vec::new();
+        let mut res = Vec::with_capacity(data.len());
         for char in data.chars() {
             res.push(
-                self.encode(&char.to_string())
-                    .ok_or(anyhow!("Character \"{char}\" not in mapping"))?,
+                self.encode(char)
+                    .ok_or_else(|| anyhow!("Character \"{char}\" not in mapping"))?,
             );
         }
         Ok(res)
@@ -133,11 +137,9 @@ impl CharacterMap {
     /// in the CharacterMap removed.
     pub fn filter_string(&self, data: &String) -> String {
         let mut filt = String::with_capacity(data.len());
-        for char in data.chars() {
-            let key = char.to_string();
-
+        for key in data.chars() {
             if self.char_to_sym.contains_key(&key) {
-                filt.push_str(&key);
+                filt.push(key);
             }
         }
         filt
@@ -145,7 +147,7 @@ impl CharacterMap {
 
     /// Given a single symbol, returns the corresponding character if it exists
     /// in the mapping
-    pub fn decode(&self, sym: u32) -> Option<String> {
+    pub fn decode(&self, sym: u32) -> Option<char> {
         if sym < self.alphabet_size {
             Some(self.sym_to_char[sym as usize].clone())
         } else {
@@ -156,10 +158,9 @@ impl CharacterMap {
     pub fn try_decode_all(&self, syms: Vec<u32>) -> Result<String> {
         let mut res = String::new();
         for sym in syms {
-            res.push_str(&self.decode(sym).ok_or(anyhow!(
-                "Symbol larger than alphabet size of {}",
-                self.alphabet_size
-            ))?);
+            res.push(self.decode(sym).ok_or_else(|| {
+                anyhow!("Symbol larger than alphabet size of {}", self.alphabet_size)
+            })?);
         }
         Ok(res)
     }
@@ -168,14 +169,9 @@ impl CharacterMap {
         let mut bytes: Vec<u8> = Vec::new();
         bytes.put_u32_le(self.alphabet_size);
 
-        // write the string lengths
-        for s in self.sym_to_char.iter() {
-            bytes.put_u32_le(s.len() as u32);
-        }
-
         // now write the strings
-        for s in self.sym_to_char.iter() {
-            bytes.extend(s.as_bytes());
+        for &s in self.sym_to_char.iter() {
+            bytes.put_u32_le(s as u32);
         }
 
         bytes
@@ -192,20 +188,15 @@ impl CharacterMap {
     pub fn from_bytes(bytes: &mut Bytes) -> Result<Self> {
         let alphabet_size = bytes.get_u32_le();
 
-        // get the number of bytes forming each character
-        let mut str_lengths: Vec<usize> = Vec::with_capacity(alphabet_size as usize);
-        for _ in 0..alphabet_size {
-            str_lengths.push(bytes.get_u32_le() as usize);
-        }
-
         // Loop through the strings in the character map and form the main
         // data structures
-        let mut sym_to_char: Vec<String> = Vec::new();
-        let mut char_to_sym: HashMap<String, u32> = HashMap::new();
+        let mut sym_to_char: Vec<char> = Vec::new();
+        let mut char_to_sym: HashMap<char, u32> = HashMap::new();
 
         for i in 0..alphabet_size {
-            let s = String::from_utf8(bytes.split_to(str_lengths[i as usize]).to_vec())?;
-            char_to_sym.insert(s.clone(), i);
+            let s = char::from_u32(bytes.get_u32_le())
+                .ok_or_else(|| anyhow!("invalid char in charmap bytes"))?;
+            char_to_sym.insert(s, i);
             sym_to_char.push(s);
         }
 
@@ -251,10 +242,15 @@ impl Sequence for CharacterSequence {
         Ok(self.encoded[i as usize])
     }
 
-    fn put_sym(&mut self, sym: u32) {
-        self.data
-            .push_str(&self.character_map.decode(sym).unwrap_or("".to_string()));
+    fn put_sym(&mut self, sym: u32) -> Result<()> {
+        self.data.push(
+            self.character_map
+                .decode(sym)
+                .ok_or_else(|| anyhow!("symbol not in character map"))?,
+        );
         self.encoded.push(sym);
+
+        Ok(())
     }
 }
 
@@ -269,8 +265,8 @@ impl CharacterSequence {
 
     pub fn from_data(data: String, character_map: CharacterMap) -> Result<Self> {
         for char in data.chars() {
-            if character_map.encode(&char.to_string()).is_none() {
-                bail!("Invalid symbol in input: {}", &char);
+            if character_map.encode(char).is_none() {
+                bail!("Invalid symbol in input: {char}");
             }
         }
         Ok(Self {
@@ -334,8 +330,16 @@ impl Sequence for U8Sequence {
         Ok(self.data[i as usize] as u32)
     }
 
-    fn put_sym(&mut self, sym: u32) {
+    fn put_sym(&mut self, sym: u32) -> Result<()> {
+        if sym > self.alphabet_size {
+            bail!(
+                "Symbol {sym} is not in alphabet of size {}",
+                self.alphabet_size
+            );
+        }
         self.data.push(sym as u8);
+
+        Ok(())
     }
 }
 
@@ -405,8 +409,15 @@ impl Sequence for U16Sequence {
         Ok(self.data[i as usize] as u32)
     }
 
-    fn put_sym(&mut self, sym: u32) {
+    fn put_sym(&mut self, sym: u32) -> Result<()> {
+        if sym > self.alphabet_size {
+            bail!(
+                "Symbol {sym} is not in alphabet of size {}",
+                self.alphabet_size
+            );
+        }
         self.data.push(sym as u16);
+        Ok(())
     }
 }
 
@@ -478,8 +489,16 @@ impl Sequence for U32Sequence {
         Ok(self.data[i as usize] as u32)
     }
 
-    fn put_sym(&mut self, sym: u32) {
+    fn put_sym(&mut self, sym: u32) -> Result<()> {
+        if sym > self.alphabet_size {
+            bail!(
+                "Symbol {sym} is not in alphabet of size {}",
+                self.alphabet_size
+            );
+        }
         self.data.push(sym as u32);
+
+        Ok(())
     }
 }
 
@@ -535,18 +554,18 @@ mod tests {
     fn test_charmap() {
         let charmap = CharacterMap::from_data(&"abcdefghijklmnopqrstuvwxyz ".to_string());
         assert_eq!(charmap.alphabet_size, 27);
-        assert_eq!(charmap.encode(&"j".to_string()), Some(9));
-        assert_eq!(charmap.encode(&"z".to_string()), Some(25));
-        assert!(charmap.encode(&"1".to_string()).is_none());
+        assert_eq!(charmap.encode('j'), Some(9));
+        assert_eq!(charmap.encode('z'), Some(25));
+        assert!(charmap.encode('1').is_none());
 
         assert_eq!(
             charmap.filter_string(&"hello world 123".to_string()),
             "hello world ".to_string()
         );
 
-        assert_eq!(charmap.decode(1), Some("b".to_string()));
-        assert_eq!(charmap.decode(26), Some(" ".to_string()));
-        assert_eq!(charmap.decode(24), Some("y".to_string()));
+        assert_eq!(charmap.decode(1), Some('b'));
+        assert_eq!(charmap.decode(26), Some(' '));
+        assert_eq!(charmap.decode(24), Some('y'));
         assert!(charmap.decode(27).is_none());
     }
 }

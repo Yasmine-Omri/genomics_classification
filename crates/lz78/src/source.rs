@@ -158,7 +158,7 @@ where
                 bail!("alphabet size specified incompatible with SourceNode implementation");
             }
             let next_sym = sample_from_pdf(&spa, rng.gen_range(0.0..1.0)) as u32;
-            syms.put_sym(next_sym);
+            syms.put_sym(next_sym)?;
 
             // traverse the LZ78 tree according to the newly-drawn symbol
             let traverse_result =

@@ -7,6 +7,25 @@ use pyo3::{exceptions::PyAssertionError, prelude::*, types::PyBytes};
 
 use crate::{Sequence, SequenceType};
 
+/// Constructs a sequential probability assignment on input data via LZ78
+/// incremental parsing. This is the implementation of the family of SPAs
+/// described in "A Family of LZ78-based Universal Sequential Probability
+/// Assignments" (Sagan and Weissman, 2024), under a Dirichlet(gamma) prior.
+///
+/// Under this prior, the sequential probability assignment is an additive
+/// perturbation of the emprical distribution, conditioned on the LZ78 prefix
+/// of each symbol (i.e., the probability model is proportional to the
+/// number of times each node of the LZ78 tree has been visited, plus gamma).
+///
+/// This SPA has the following capabilities:
+/// - training on one or more sequences,
+/// - log loss ("perplexity") computation for test sequences,
+/// - SPA computation (using the LZ78 context reached at the end of parsing
+///     the last training block),
+/// - sequence generation.
+///
+/// Note that the LZ78SPA does not perform compression; you would have to use
+/// a separate BlockLZ78Encoder object to perform block-wise compression.
 #[pyclass]
 pub struct LZ78SPA {
     spa: lz78::spa::LZ78SPA,
@@ -26,6 +45,13 @@ impl LZ78SPA {
         })
     }
 
+    /// Use a block of data to update the SPA. If `include_prev_context` is
+    /// true, then this block is considered to be from the same sequence as
+    /// the previous. Otherwise, it is assumed to be a separate sequence, and
+    /// we return to the root of the LZ78 prefix tree.
+    ///
+    /// Returns the self-entropy log loss incurred while processing this
+    /// sequence.
     #[pyo3(signature = (input, include_prev_context=false))]
     pub fn train_on_block(&mut self, input: Sequence, include_prev_context: bool) -> PyResult<f64> {
         if self.empty_seq_of_correct_datatype.is_some() {
@@ -42,32 +68,29 @@ impl LZ78SPA {
         }
         Ok(match &input.sequence {
             crate::SequenceType::U8(u8_sequence) => {
-                if self.empty_seq_of_correct_datatype.is_none() {
-                    self.empty_seq_of_correct_datatype =
-                        Some(SequenceType::U8(U8Sequence::new(input.alphabet_size()?)));
-                }
+                self.empty_seq_of_correct_datatype =
+                    Some(SequenceType::U8(U8Sequence::new(input.alphabet_size()?)));
                 self.spa.train_on_block(u8_sequence, include_prev_context)?
             }
             crate::SequenceType::Char(character_sequence) => {
-                if self.empty_seq_of_correct_datatype.is_none() {
-                    self.empty_seq_of_correct_datatype = Some(SequenceType::Char(
-                        CharacterSequence::new(character_sequence.character_map.clone()),
-                    ));
-                }
+                self.empty_seq_of_correct_datatype = Some(SequenceType::Char(
+                    CharacterSequence::new(character_sequence.character_map.clone()),
+                ));
                 self.spa
                     .train_on_block(character_sequence, include_prev_context)?
             }
             crate::SequenceType::U32(u32_sequence) => {
-                if self.empty_seq_of_correct_datatype.is_none() {
-                    self.empty_seq_of_correct_datatype =
-                        Some(SequenceType::U32(U32Sequence::new(input.alphabet_size()?)));
-                }
+                self.empty_seq_of_correct_datatype =
+                    Some(SequenceType::U32(U32Sequence::new(input.alphabet_size()?)));
                 self.spa
                     .train_on_block(u32_sequence, include_prev_context)?
             }
         })
     }
 
+    /// Given the SPA that has been trained thus far, compute the self-entropy
+    /// log loss ("perplexity") of a test sequence. `include_prev_context` has
+    /// the same meaning as in `train_on_block`.
     #[pyo3(signature = (input, include_prev_context=false))]
     pub fn compute_test_loss(
         &mut self,
@@ -96,14 +119,42 @@ impl LZ78SPA {
         })
     }
 
+    /// Computes the SPA for every symbol in the alphabet, using the LZ78
+    /// context reached at the end of parsing the last training block
     pub fn compute_spa_at_current_state(&self) -> Vec<f64> {
         self.spa.compute_spa_at_current_state()
     }
 
+    /// Returns the normaliized self-entropy log loss incurred from training
+    /// the SPA thus far.
     pub fn get_normalized_log_loss(&self) -> f64 {
         self.spa.get_normalized_log_loss()
     }
 
+    /// Generates a sequence of data, using temperature and top-k sampling (see
+    /// the "Experiments" section of [Sagan and Weissman 2024] for more details).
+    ///
+    /// Inputs:
+    /// - len: number of symbols to generate
+    /// - min_context: the SPA tries to maintain a context of at least a
+    ///     certain length at all times. So, when we reach a leaf of the LZ78
+    ///     prefix tree, we try traversing the tree with different suffixes of
+    ///     the generated sequence until we get a sufficiently long context
+    ///     for the next symbol.
+    /// - temperature: a measure of how "random" the generated sequence is. A
+    ///     temperature of 0 deterministically generates the most likely
+    ///     symbols, and a temperature of 1 samples directly from the SPA.
+    ///     Temperature values around 0.1 or 0.2 function well.
+    /// - top_k: forces the generated symbols to be of the top_k most likely
+    ///     symbols at each timestep.
+    /// - seed_data: you can specify that the sequence of generated data
+    /// be the continuation of the specified sequence.
+    ///
+    /// Returns a tuple of the generated sequence and that sequence's log loss,
+    /// or perplexity.
+    ///
+    /// Errors if the SPA has not been trained so far, or if the seed data is
+    /// not over the same alphabet as the training data.
     #[pyo3(signature = (len, min_context=0, temperature=0.1, top_k=10, seed_data=None))]
     pub fn generate_data(
         &mut self,
@@ -189,6 +240,8 @@ impl LZ78SPA {
         Ok((Sequence { sequence: output }, loss))
     }
 
+    /// Returns a byte array representing the trained SPA, e.g., to save the
+    /// SPA to a file.
     pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         let mut bytes = self.spa.to_bytes()?;
         match &self.empty_seq_of_correct_datatype {
@@ -204,6 +257,7 @@ impl LZ78SPA {
 }
 
 #[pyfunction]
+/// Constructs a trained SPA from its byte array representation.
 pub fn spa_from_bytes<'py>(bytes: Py<PyBytes>, py: Python<'py>) -> PyResult<LZ78SPA> {
     let mut bytes: Bytes = bytes.as_bytes(py).to_owned().into();
     let spa = lz78::spa::LZ78SPA::from_bytes(&mut bytes)?;

@@ -136,6 +136,24 @@ impl SequenceType {
     }
 }
 
+/// A Sequence is a list of strings or integers that can be encoded by LZ78.
+/// Each sequence is associated with an alphabet size, A.
+///
+/// If the sequence consists of integers, they must be in the range
+/// {0, 1, ..., A-1}. If A < 256, the sequence is stored internally as bytes.
+/// Otherwise, it is stored as `uint32`.
+///
+/// If the sequence is a string, a `CharacterMap` object maps each
+/// character to a number between 0 and A-1.
+///
+/// Inputs:
+/// - data: either a list of integers or a string.
+/// - alphabet_size (optional): the size of the alphabet. If this is `None`,
+///     then the alphabet size is inferred from the data.
+/// - charmap (optional): A `CharacterMap` object; only valid if `data` is a
+///     string. If `data` is a string and this is `None`, then the character
+///     map is inferred from the data.
+///
 #[pyclass]
 #[derive(Clone)]
 pub struct Sequence {
@@ -194,6 +212,10 @@ impl Sequence {
         }
     }
 
+    /// Extend the sequence with new data, which must have the same alphabet
+    /// as the current sequence. If this sequence is represented by a string,
+    /// then `data` will be encoded using the same character map as the
+    /// current sequence
     pub fn extend<'py>(&mut self, data: Bound<'py, PyAny>) -> PyResult<()> {
         match &mut self.sequence {
             SequenceType::U8(u8_sequence) => {
@@ -213,10 +235,28 @@ impl Sequence {
         Ok(())
     }
 
+    /// Returns the size of the sequence's alphabet
     pub fn alphabet_size(&self) -> PyResult<u32> {
         Ok(self.sequence.alphabet_size())
     }
 
+    /// If this sequence is represented by a string, returns the underlying
+    /// object that maps characters to integers. Otherwise, this will error.
+    pub fn get_character_map(&self) -> PyResult<CharacterMap> {
+        match &self.sequence {
+            SequenceType::Char(character_sequence) => Ok(CharacterMap {
+                map: character_sequence.character_map.clone(),
+            }),
+            _ => {
+                return Err(PyAssertionError::new_err(
+                    "Tried to get a character map from an integer sequence",
+                ))
+            }
+        }
+    }
+
+    /// Fetches the raw data (as a list of integers, or a string) underlying
+    /// this sequence
     pub fn get_data(&self, py: Python) -> PyObject {
         match &self.sequence {
             SequenceType::U8(u8_sequence) => u8_sequence.data.to_object(py),
@@ -283,6 +323,17 @@ impl Sequence {
     }
 }
 
+/// Maps characters in a string to uint32 values in a contiguous range, so that
+/// a string can be used as an individual sequence. Has the capability to
+/// **encode** a string into the corresponding integer representation, and
+/// **decode** a list of integers into a string.
+///
+/// Inputs:
+/// - data: a string consisting of all of the characters that will appear in
+///     the character map. For instance, a common use case is:
+///     ```
+///     charmap = CharacterMap("abcdefghijklmnopqrstuvwxyz")
+///     ```
 #[pyclass]
 #[derive(Clone)]
 pub struct CharacterMap {
@@ -298,32 +349,24 @@ impl CharacterMap {
         })
     }
 
-    fn encode(&self, char: String) -> PyResult<u32> {
-        Ok(self
-            .map
-            .encode(&char)
-            .ok_or(PyAssertionError::new_err("could not encode character"))?)
-    }
-
-    fn encode_all(&self, s: String) -> PyResult<Vec<u32>> {
+    /// Given a string, returns its encoding as a list of integers
+    pub fn encode(&self, s: String) -> PyResult<Vec<u32>> {
         Ok(self.map.try_encode_all(&s)?)
     }
 
-    fn decode(&self, sym: u32) -> PyResult<String> {
-        Ok(self
-            .map
-            .decode(sym)
-            .ok_or(PyAssertionError::new_err("could not decode character"))?)
-    }
-
-    fn decode_all(&self, syms: Vec<u32>) -> PyResult<String> {
+    /// Given a list of integers between 0 and self.alphabet_size() - 1, return
+    /// the corresponding string representation
+    pub fn decode(&self, syms: Vec<u32>) -> PyResult<String> {
         Ok(self.map.try_decode_all(syms)?)
     }
 
-    fn filter_string(&self, data: String) -> PyResult<String> {
+    /// Given a string, filter out all characters that aren't part of the
+    /// mapping and return the resulting string
+    pub fn filter_string(&self, data: String) -> PyResult<String> {
         Ok(self.map.filter_string(&data))
     }
 
+    /// Returns the number of characters that can be represented by this map
     pub fn alphabet_size(&self) -> PyResult<u32> {
         Ok(self.map.alphabet_size)
     }
