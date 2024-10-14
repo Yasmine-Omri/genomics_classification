@@ -2,3 +2,4 @@ data/
 target/
 Cargo.lock
 *outputs/
+test_data/
