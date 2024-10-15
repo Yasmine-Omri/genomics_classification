@@ -21,7 +21,7 @@ error [E0463]: can't find crate for core
 ```
 Running the recommended command `rustup target add ×86_64-apple-darwin` should resolve the issue.
 
-### Setup Notes
+### Notes: Rust Development
 If you are modifying the Rust code and are using VSCode, you have to do a few more steps:
 1. Install the `rust` and `rust-analyzer` extensions.
 2. Adding extra environment variablers to the rust server:
