@@ -11,6 +11,16 @@ You need to install Rust and Maturin, and then install the Python bindings for t
 3. Install Maturin: `pip install maturin`
 4. Install the `lz78` Python package: `cd crates/python && maturin develop && cd ../..`
 
+**NOTE**: If you use virtual environments, you may run into an issue. If you are a conda user, it's possible the `(base)` environment may be activated on startup. `maturin` does not allow for two active virtual environments (ie. via `venv` and `conda`). You must make sure only one is active. One solution is to run `conda deactivate` in preference of your `venv` based virtual environment.
+
+**NOTE**: If you are using MacOS, you may run into the following error with `maturin develop`:
+```
+error [E0463]: can't find crate for core
+    = note: the X86_64-apple-darwin target may not be installed
+    = help: consider downloading the target with 'rustup target add ×86_64-apple-darwin'
+```
+Running the recommended command `rustup target add ×86_64-apple-darwin` should resolve the issue.
+
 ### Setup Notes
 If you are modifying the Rust code and are using VSCode, you have to do a few more steps:
 1. Install the `rust` and `rust-analyzer` extensions.
