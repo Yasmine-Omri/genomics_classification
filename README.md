@@ -6,9 +6,26 @@ The codebase is in Rust, with a Python API available. This tutorial goes through
 ## Setup
 You need to install Rust and Maturin, and then install the Python bindings for the `lz78` library as an editable Python package.
 1. Install Rust: [Instructions](https://www.rust-lang.org/tools/install).
+    - After you are done installing Rust, restart your terminal.
 2. If applicable, switch to the desired Python environment.
 3. Install Maturin: `pip install maturin`
 4. Install the `lz78` Python package: `cd crates/python && maturin develop && cd ../..`
+
+### Setup Notes
+If you are modifying the Rust code and are using VSCode, you have to do a few more steps:
+1. Install the `rust` and `rust-analyzer` extensions.
+2. Adding extra environment variablers to the rust server:
+    - In a terminal, run `echo $PATH`, and copy the output.
+    - Go to `Preferences: Remote Settings (JSON)` if you are working on a remote machine, or `Preferences: User Settings (JSON)` if you are working locally (you can find this by pressing `F1` and then searching), and make sure it looks like the following:
+        ```
+        {
+            "rust-analyzer.runnables.extraEnv": {
+                "PATH": "<the string you copied in the previous step>"
+            },
+        }
+        ```
+3. Open `User Settings (JSON)` and add `"editor.formatOnSave": true`
+4. Restart your VSCode window.
 
 ## Python Interface
 See `lz78_python_interface_tutorial.ipynb` for a tutorial on the python API.
