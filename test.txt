@@ -1,0 +1,2 @@
+The total number of tested sequences is:  6478
+The accuracy of this classifier is:  0.6498919419573943
