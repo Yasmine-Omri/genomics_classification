@@ -119,10 +119,54 @@ impl LZ78SPA {
         })
     }
 
+    #[pyo3(signature = (input, include_prev_context=false, min_context = 1))]
+    pub fn compute_test_loss_backshift(
+        &mut self,
+        input: Sequence,
+        include_prev_context: bool,
+        min_context: u64,
+    ) -> PyResult<f64> {
+        if self.empty_seq_of_correct_datatype.is_some() {
+            self.empty_seq_of_correct_datatype
+                .as_ref()
+                .unwrap()
+                .assert_types_match(&input.sequence)?;
+        } else {
+            return Err(PyAssertionError::new_err("SPA hasn't been trained yet"));
+        }
+
+        Ok(match &input.sequence {
+            crate::SequenceType::U8(u8_sequence) => self.spa.compute_test_loss_backshift(
+                u8_sequence,
+                include_prev_context,
+                min_context,
+            )?,
+            crate::SequenceType::Char(character_sequence) => self.spa.compute_test_loss_backshift(
+                character_sequence,
+                include_prev_context,
+                min_context,
+            )?,
+            crate::SequenceType::U32(u32_sequence) => self.spa.compute_test_loss_backshift(
+                u32_sequence,
+                include_prev_context,
+                min_context,
+            )?,
+        })
+    }
+
     /// Computes the SPA for every symbol in the alphabet, using the LZ78
     /// context reached at the end of parsing the last training block
     pub fn compute_spa_at_current_state(&self) -> Vec<f64> {
         self.spa.compute_spa_at_current_state()
+    }
+
+    pub fn get_tree_depth(&self) -> usize {
+        self.spa.get_tree_depth()
+    }
+
+    pub fn set_gamma(&mut self, gamma: f64) {
+        //yasmine
+        self.spa.set_gamma(gamma)
     }
 
     /// Returns the normaliized self-entropy log loss incurred from training

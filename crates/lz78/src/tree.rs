@@ -125,6 +125,11 @@ impl LZ78Tree {
         }
     }
 
+    //yasmine
+    pub fn set_gamma(&mut self, new_gamma: f64) {
+        self.spa_gamma = new_gamma;
+    }
+
     /// Used for storing an LZ78Tree to a file
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes: Vec<u8> = Vec::new();
@@ -238,6 +243,7 @@ impl LZ78Tree {
     ///
     /// If `grow` is true, a leaf will be added to the tree if possible.
     /// If `update_counts` is true,
+
     pub fn traverse_to_leaf_from<T: ?Sized>(
         &mut self,
         node_idx: u64,
@@ -310,5 +316,31 @@ impl LZ78Tree {
             added_leaf,
             log_loss,
         })
+    }
+
+    // Added: to get depth of tree
+    pub fn depth(&self) -> usize {
+        // Start from the root and recursively find the depth
+        self.calculate_depth(0) // ROOT_IDX is 0
+    }
+
+    // Helper method to recursively calculate the depth of the tree
+    fn calculate_depth(&self, node_idx: u64) -> usize {
+        let node = self.get_node(node_idx);
+
+        // If the node has no children, it's a leaf node, return depth 1
+        if node.branch_idxs.is_empty() {
+            return 1;
+        }
+
+        // Otherwise, calculate the depth of each child and return the maximum depth
+        let mut max_depth = 0;
+        for &child_idx in node.branch_idxs.values() {
+            let child_depth = self.calculate_depth(child_idx);
+            max_depth = max_depth.max(child_depth);
+        }
+
+        // Return the depth of this node (1 for this node, plus the max child depth)
+        max_depth + 1
     }
 }

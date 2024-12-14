@@ -154,6 +154,8 @@ pub trait SPA {
     /// true, then this block is considered to be from the same sequence as
     /// the previous. Otherwise, it is assumed to be a separate sequence (e.g.,
     /// for the LZ78 SPA, this means we start at the root of the tree).
+    fn set_gamma(&mut self, gamma: f64); //yasmine
+
     fn train_on_block<T: ?Sized>(&mut self, input: &T, include_prev_context: bool) -> Result<f64>
     where
         T: Sequence;
@@ -169,6 +171,8 @@ pub trait SPA {
 
     /// Computes the SPA for every symbol in the alphabet
     fn compute_spa_at_current_state(&self) -> Vec<f64>;
+
+    fn get_tree_depth(&self) -> usize;
 
     /// Returns the normaliized log loss from training the SPA
     fn get_normalized_log_loss(&self) -> f64;
@@ -201,6 +205,8 @@ pub struct LZ78SPA {
     n: u64,
     total_log_loss: f64,
     alphabet_size: u32,
+    dep_leaves_added: Vec<u32>,
+    curr_depth: u32,
 }
 
 impl LZ78SPA {
@@ -211,7 +217,14 @@ impl LZ78SPA {
             n: 0,
             total_log_loss: 0.0,
             alphabet_size: alpha_size,
+            dep_leaves_added: Vec::new(),
+            curr_depth: 0,
         }
+    }
+
+    //yasmine
+    pub fn update_gamma(&mut self, gamma: f64) {
+        self.tree.set_gamma(gamma); // Tree knows gamma
     }
 
     /// Traverses the tree  using a provided slice of the input sequence, and
@@ -305,6 +318,8 @@ impl LZ78SPA {
             alphabet_size,
             total_log_loss,
             tree,
+            dep_leaves_added: Vec::new(),
+            curr_depth: 0,
         })
     }
 
@@ -315,6 +330,93 @@ impl LZ78SPA {
         let mut bytes: Bytes = bytes.into();
         Self::from_bytes(&mut bytes)
     }
+
+    // HERE HERE Changes for back-shift parsing HERE HERE
+    pub fn compute_test_loss_backshift<T>(
+        &mut self,
+        input: &T,
+        include_prev_context: bool,
+        min_context: u64,
+    ) -> Result<f64>
+    where
+        T: Sequence,
+    {
+        Ok(self
+            .compute_test_loss_on_slice_from_state_backshift(
+                input,
+                if include_prev_context {
+                    self.state
+                } else {
+                    LZ78Tree::ROOT_IDX
+                },
+                0,
+                input.len(),
+                min_context,
+            )?
+            .1)
+    }
+
+    pub fn compute_test_loss_on_slice_from_state_backshift<T: Sequence>(
+        &mut self,
+        input: &T,
+        state: u64,
+        start_idx: u64,
+        len: u64,
+        min_context: u64,
+    ) -> Result<(u64, f64)> {
+        let mut curr_idx = start_idx;
+        let mut log_loss = 0.0;
+        let end_idx = curr_idx + len;
+
+        let mut state = state;
+        while curr_idx < end_idx {
+            let traversal_output = self.tree.traverse_to_leaf_from(
+                state,
+                input,
+                curr_idx,
+                curr_idx + 1, // only traverse one symbol at a time
+                false,
+                false,
+            )?;
+
+            curr_idx += 1;
+            log_loss += traversal_output.log_loss;
+            state = traversal_output.state_idx;
+
+            // If we're at a place with no information (root or leaf), we need to
+            // re-seed the SPA with some context
+            if self.tree.is_leaf(state) {
+                // keep on trying to re-seed the SPA: first start at min_context
+                // symbols from the end, and traverse the prefix tree. If we
+                // reach a leaf at any point, try with min_context - 1 symbols,
+                // and repeat until the traversal does not reach a leaf.
+
+                // (curr_idx - min_ctx), (curr_idx - min_ctx + 1), ..., (curr_idx - 1)
+                for backshift_start in (curr_idx - min_context.min(curr_idx))..=curr_idx {
+                    state = if backshift_start == curr_idx {
+                        // we completely failed to re-seed the SPA, so we give
+                        // up and generate the next symbol from the root
+                        LZ78Tree::ROOT_IDX
+                    } else {
+                        self.maybe_traverse_once_to_leaf(
+                            input,
+                            LZ78Tree::ROOT_IDX,
+                            backshift_start,
+                            curr_idx - backshift_start,
+                        )?
+                        .0
+                    };
+
+                    // re-seeding was successful!
+                    if !self.tree.is_leaf(state) && state != LZ78Tree::ROOT_IDX {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok((state, log_loss))
+    }
 }
 
 impl SPA for LZ78SPA {
@@ -323,6 +425,12 @@ impl SPA for LZ78SPA {
     /// course of this block. By default, the LZ78Tree keeps track of the
     /// number of times each node was visited, which is sufficient to compute
     /// the SPA
+
+    //yasmine
+    fn set_gamma(&mut self, gamma: f64) {
+        self.update_gamma(gamma); // Delegate to the LZ78SPA method
+    }
+
     fn train_on_block<T: ?Sized>(&mut self, input: &T, include_prev_context: bool) -> Result<f64>
     where
         T: Sequence,
@@ -346,13 +454,17 @@ impl SPA for LZ78SPA {
                 true,
             )?;
 
+            let phrase_len = (traversal_output.phrase_end_idx - start_idx) as u32 + self.curr_depth;
             start_idx = traversal_output.phrase_end_idx + 1;
             self.total_log_loss += traversal_output.log_loss;
 
             if traversal_output.added_leaf.is_some() {
                 self.state = LZ78Tree::ROOT_IDX;
+                self.dep_leaves_added.push(phrase_len);
+                self.curr_depth = 0;
             } else {
                 self.state = traversal_output.state_idx;
+                self.curr_depth = phrase_len;
                 break;
             }
         }
@@ -381,6 +493,10 @@ impl SPA for LZ78SPA {
 
     fn compute_spa_at_current_state(&self) -> Vec<f64> {
         self.tree.compute_spa(self.state)
+    }
+
+    fn get_tree_depth(&self) -> usize {
+        self.tree.depth()
     }
 
     fn get_normalized_log_loss(&self) -> f64 {
